@@ -15,12 +15,12 @@ func (t *Engine) sign(msg *gossipv1.SignedMessage) {
 	// TODO
 }
 
-func (t *Engine) verifyEcho(msg *gossipv1.Echo) error {
+func (st *GuardianStorage) verifyEcho(msg *gossipv1.Echo) error {
 	// TODO
 	return nil
 }
 
-func (t *Engine) verifySignedMessage(msg *gossipv1.SignedMessage) error {
+func (st *GuardianStorage) verifySignedMessage(msg *gossipv1.SignedMessage) error {
 	// TODO
 	return nil
 }
