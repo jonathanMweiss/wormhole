@@ -32,33 +32,47 @@ func partyIdToProto(pid *tss.PartyID) *gossipv1.PartyId {
 	}
 }
 
+var (
+	ErrEchoIsNil          = fmt.Errorf("echo is nil")
+	ErrNoEchoSignature    = fmt.Errorf("echo doesn't contain a signature")
+	ErrNilPartyId         = fmt.Errorf("party id is nil")
+	ErrEmptyIDInPID       = fmt.Errorf("partyId identifier is empty")
+	ErrEmptyKeyInPID      = fmt.Errorf("partyId doesn't contain a key")
+	ErrSignedMessageIsNil = fmt.Errorf("SignedMessage is nil")
+	ErrNilPayload         = fmt.Errorf("SignedMessage doesn't contain a payload")
+)
+
 func vaidateEchoCorrectForm(e *gossipv1.Echo) error {
 	if e == nil {
-		return fmt.Errorf("echo is nil")
+		return ErrEchoIsNil
 	}
 
 	if e.Signature == nil {
-		return fmt.Errorf("echo doesn't contain a signature")
+		return ErrNoEchoSignature
 	}
 
 	if err := validatePartIdProtoCorrectForm(e.Echoer); err != nil {
 		return err
 	}
 
-	return validateSignedMessageCorrectForm(e.Message)
+	if err := validateSignedMessageCorrectForm(e.Message); err != nil {
+		return fmt.Errorf("echo message error:%w", err)
+	}
+
+	return nil
 }
 
 func validatePartIdProtoCorrectForm(p *gossipv1.PartyId) error {
 	if p == nil {
-		return fmt.Errorf("party id is nil")
+		return ErrNilPartyId
 	}
 
 	if p.Id == "" {
-		return fmt.Errorf("party id doesn't contain an id")
+		return ErrEmptyIDInPID
 	}
 
-	if p.Key == nil {
-		return fmt.Errorf("party id doesn't contain a key")
+	if len(p.Key) == 0 {
+		return ErrEmptyKeyInPID
 	}
 
 	return nil
@@ -67,15 +81,15 @@ func validatePartIdProtoCorrectForm(p *gossipv1.PartyId) error {
 
 func validateSignedMessageCorrectForm(m *gossipv1.SignedMessage) error {
 	if m == nil {
-		return fmt.Errorf("signed message is nil")
+		return ErrSignedMessageIsNil
 	}
 
 	if err := validatePartIdProtoCorrectForm(m.Sender); err != nil {
-		return err
+		return fmt.Errorf("signedMessage sender pID error:%w", err)
 	}
 
 	if m.Payload == nil {
-		return fmt.Errorf("signed message doesn't contain a payload")
+		return ErrNilPayload
 	}
 
 	for _, v := range m.Recipients {

@@ -305,6 +305,8 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 	return
 }
 
+var ErrBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
+
 func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 	parsed, err := t.parseEcho(m)
 	if err != nil {
@@ -317,7 +319,7 @@ func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 	}
 
 	if rnd == round1Message1 || rnd == round2Message {
-		return false, fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
+		return false, ErrBadRoundsInEcho
 	}
 
 	shouldEcho, shouldDeliver, err := t.relbroadcastInspection(parsed, m.Echo)
@@ -372,7 +374,7 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 	if _, ok := t.received[id]; ok {
-		return fmt.Errorf("equivocation detected")
+		return ErrEquivicatingGuardian
 	}
 
 	t.received[id] = &broadcaststate{
@@ -387,6 +389,11 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 	return nil
 }
 
+var (
+	ErrUnkownEchoer = fmt.Errorf("echoer is not a known guardian")
+	ErrUnkownSender = fmt.Errorf("sender is not a known guardian")
+)
+
 func (t *Engine) parseEcho(m *gossipv1.PropagatedMessage_Echo) (tss.ParsedMessage, error) {
 	echoMsg := m.Echo
 
@@ -395,12 +402,12 @@ func (t *Engine) parseEcho(m *gossipv1.PropagatedMessage_Echo) (tss.ParsedMessag
 	}
 
 	if t.GuardianStorage.contains(protoToPartyId(echoMsg.Echoer)) {
-		return nil, fmt.Errorf("echoer index is out of range")
+		return nil, ErrUnkownEchoer
 	}
 
 	senderPid := protoToPartyId(echoMsg.Message.Sender)
 	if !t.GuardianStorage.contains(senderPid) {
-		return nil, fmt.Errorf("sender is not a known guardian")
+		return nil, ErrUnkownSender
 	}
 
 	return tss.ParseWireMessage(echoMsg.Message.Payload, senderPid, true)
@@ -439,12 +446,12 @@ func (t *Engine) parseUnicast(m *gossipv1.PropagatedMessage_Unicast) (tss.Parsed
 	}
 
 	if !t.isUnicastForMe(msg) {
-		return nil, fmt.Errorf("unicast message is not for me")
+		return nil, fmt.Errorf("unicast message is not for me") // not sure if needs an error.
 	}
 
 	senderPid := protoToPartyId(msg.Sender)
 	if !t.GuardianStorage.contains(senderPid) {
-		return nil, fmt.Errorf("sender is not a known guardian")
+		return nil, ErrUnkownSender
 	}
 
 	return tss.ParseWireMessage(msg.Payload, senderPid, false)
