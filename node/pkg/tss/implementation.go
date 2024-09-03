@@ -151,14 +151,19 @@ func NewReliableTSS(storage *GuardianStorage) (*Engine, error) {
 	fpErrChannel := make(chan *tss.Error)
 
 	t := &Engine{
+		ctx: nil,
+
+		logger:          zap.Logger{},
 		GuardianStorage: *storage,
-
-		fp:           fp,
-		fpOutChan:    fpOutChan,
-		fpSigOutChan: fpSigOutChan,
-		fpErrChannel: fpErrChannel,
-
-		gossipOutChan: make(chan *gossipv1.GossipMessage),
+		fp:              fp,
+		fpOutChan:       fpOutChan,
+		fpSigOutChan:    fpSigOutChan,
+		fpErrChannel:    fpErrChannel,
+		gossipOutChan:   make(chan *gossipv1.GossipMessage),
+		started:         false,
+		msgSerialNumber: 0,
+		mtx:             &sync.Mutex{},
+		received:        map[digest]*broadcaststate{},
 	}
 
 	return t, nil
@@ -282,7 +287,7 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 			return
 		}
 
-		echo := proto.Clone(m.Echo).(*gossipv1.Echo)
+		echo, _ := proto.Clone(m.Echo).(*gossipv1.Echo)
 		if err := t.signEcho(echo); err != nil {
 			return
 		}
@@ -311,7 +316,7 @@ func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 		return false, fmt.Errorf("couldn't extract round from echo: %w", err)
 	}
 
-	if rnd == round1Message1 && rnd == round2Message {
+	if rnd == round1Message1 || rnd == round2Message {
 		return false, fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
 	}
 
@@ -347,7 +352,7 @@ func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {
 		return fmt.Errorf("unicast cannot receive messages from round: %s", rnd) // Malicious?
 	}
 
-	if err := t.validateUnicastDoesntExist(parsed, m); err != nil {
+	if err := t.validateUnicastDoesntExist(parsed); err != nil {
 		return fmt.Errorf("failed to ensure no equivication present in unicast: %w", err)
 	}
 
@@ -358,7 +363,7 @@ func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {
 	return nil
 }
 
-func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage, m *gossipv1.PropagatedMessage_Unicast) error {
+func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 	id, err := t.getMessageUUID(parsed)
 	if err != nil {
 		return err

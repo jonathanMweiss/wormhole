@@ -31,7 +31,7 @@ func (st *GuardianStorage) verifyEcho(msg *gossipv1.Echo) error {
 	return nil
 }
 func (t *Engine) signEcho(msg *gossipv1.Echo) error {
-	// TODO
+	msg.Echoer = partyIdToProto(t.Self)
 	return nil
 }
 
