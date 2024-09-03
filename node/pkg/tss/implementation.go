@@ -378,6 +378,7 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 	t.received[id] = &broadcaststate{
 		timeReceived:  time.Now(), // used for GC.
 		message:       nil,        // no need to store the content.
+		messageDigest: digest{},   // no need to check content, since we never accept another.
 		votes:         nil,        // no votes should be stored for a unicast.
 		echoedAlready: true,       // ensuring this never echoed since it is a unicast.
 		mtx:           nil,        // no need to lock this, just store it.

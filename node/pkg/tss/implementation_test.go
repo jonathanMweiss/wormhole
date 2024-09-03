@@ -86,37 +86,84 @@ func TestBroadcast(t *testing.T) {
 		a.True(shouldBroadcast)
 		a.False(shouldDeliver)
 	})
+}
 
-	t.Run("forEnoughEchoesButBroadcastOnlyOnce", func(t *testing.T) {
+func TestDeliverAfter2fPlus1(t *testing.T) {
+	a := assert.New(t)
+	engines := loadGuardians(a)
+	e1, e2, e3 := engines[0], engines[1], engines[2]
+
+	// two different signers on an echo, meaning it will receive from two players.
+	// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
+	parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
+
+	echo := parsedIntoEcho(a, e1, parsed1)
+	a.NoError(e2.signEcho(echo))
+
+	shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
+	a.NoError(err)
+	a.False(shouldBroadcast)
+	a.False(shouldDeliver)
+
+	a.NoError(e3.signEcho(echo))
+
+	shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+	a.NoError(err)
+	a.True(shouldBroadcast)
+	a.False(shouldDeliver)
+
+	a.NoError(e1.signEcho(echo))
+
+	shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+	a.NoError(err)
+	a.False(shouldBroadcast)
+	a.True(shouldDeliver)
+}
+
+func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
+	a := assert.New(t)
+	engines := loadGuardians(a)
+	e1 := engines[0]
+
+	// this is used as session ID, and was added by us specifically to each message, to ensure two sessions differ.
+	// Changing this, is like looking at a whole different session, where signature is required over another message.
+	OriginalMessageDigest := big.NewInt(0)
+	uid1, err := e1.getMessageUUID(signing.NewSignRound3Message(e1.Self, big.NewInt(0), OriginalMessageDigest))
+	a.NoError(err)
+
+	uid2, err := e1.getMessageUUID(signing.NewSignRound3Message(e1.Self, big.NewInt(1), OriginalMessageDigest))
+	a.NoError(err)
+	a.Equal(uid1, uid2)
+}
+
+func TestEquivocation(t *testing.T) {
+
+	t.Run("inBroadcastLogic", func(t *testing.T) {
 		a := assert.New(t)
 		engines := loadGuardians(a)
-		e1, e2, e3 := engines[0], engines[1], engines[2]
+		e1, e2 := engines[0], engines[1]
 
 		// two different signers on an echo, meaning it will receive from two players.
 		// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
-		parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
 
-		echo := parsedIntoEcho(a, e1, parsed1)
-		a.NoError(e2.signEcho(echo))
+		// this is used as session ID, and was added by us specifically to each message, to ensure two sessions differ.
+		// Changing this, is like looking at a whole different session, where signature is required over another message.
+		OriginalMessageDigest := big.NewInt(0)
 
-		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
+		parsed1 := signing.NewSignRound3Message(e2.Self, big.NewInt(0), OriginalMessageDigest)
+
+		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, parsedIntoEcho(a, e2, parsed1))
 		a.NoError(err)
-		a.False(shouldBroadcast)
+		a.True(shouldBroadcast) //should broadcast since e2 is the source of this message.
 		a.False(shouldDeliver)
 
-		a.NoError(e3.signEcho(echo))
+		// same digest, different message (same signature session, different message)
+		parsed2 := signing.NewSignRound3Message(e2.Self, big.NewInt(1), OriginalMessageDigest)
 
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.True(shouldBroadcast)
-		a.False(shouldDeliver)
-
-		a.NoError(e1.signEcho(echo))
-
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
+		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed2, parsedIntoEcho(a, e2, parsed2))
+		a.ErrorAs(err, &ErrEquivicatingGuardian)
 		a.False(shouldBroadcast)
-		a.True(shouldDeliver)
+		a.False(shouldDeliver)
 	})
 }
 

@@ -1,11 +1,13 @@
 package tss
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
 	"github.com/yossigi/tss-lib/v2/tss"
+	"google.golang.org/protobuf/proto"
 )
 
 // The following code follows Bracha's reliable broadcast algorithm.
@@ -17,9 +19,12 @@ type voterId struct {
 }
 
 type broadcaststate struct {
-	timeReceived time.Time
-	message      *gossipv1.SignedMessage
-	votes        map[voterId]signature
+	// The following three fields should not be changed after creation of broadcaststate:
+	timeReceived  time.Time
+	message       *gossipv1.SignedMessage
+	messageDigest digest
+
+	votes map[voterId]signature
 	// if set to true: don't echo again, even if received from original sender.
 	echoedAlready bool
 	// if set to true: don't deliver again.
@@ -44,15 +49,26 @@ func (s *broadcaststate) shouldDeliver(f int) bool {
 	return true
 }
 
-func (s *broadcaststate) updateState(f int, msg *gossipv1.Echo) (shouldEcho bool) {
+var ErrEquivicatingGuardian = fmt.Errorf("equivication, guardian sent two different messages for the same round and session")
+
+func (s *broadcaststate) updateState(f int, msg *gossipv1.Echo) (shouldEcho bool, err error) {
 	isMsgSrc := equalPartyIds(protoToPartyId(msg.Echoer), protoToPartyId(msg.Message.Sender))
+
+	tmp, err := proto.Marshal(msg.Message)
+	if err != nil {
+		return false, err
+	}
+	// checking outside of lock since s.messageDigest is read only after creation.
+	if s.messageDigest != hash(tmp) {
+		return false, fmt.Errorf("%w: %v", ErrEquivicatingGuardian, msg.Echoer)
+	}
 
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
 	s.votes[voterId{id: msg.Echoer.Id, key: string(msg.Echoer.Key)}] = msg.Signature // stores only validate
 	if s.echoedAlready {
-		return false
+		return
 	}
 
 	if isMsgSrc {
@@ -86,9 +102,15 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg *gossipv1.
 	t.mtx.Lock()
 	state, ok := t.received[d]
 	if !ok {
+		tmp, err := proto.Marshal(msg.Message)
+		if err != nil {
+			return false, false, err
+		}
+
 		state = &broadcaststate{
 			timeReceived:     time.Now(),
 			message:          msg.Message,
+			messageDigest:    hash(tmp),
 			votes:            make(map[voterId]signature),
 			echoedAlready:    false,
 			alreadyDelivered: false,
@@ -105,7 +127,10 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg *gossipv1.
 
 	f := t.GuardianStorage.getMaxExpectedFaults()
 
-	allowedToBroadcast := state.updateState(f, msg)
+	allowedToBroadcast, err := state.updateState(f, msg)
+	if err != nil {
+		return false, false, err
+	}
 
 	if state.shouldDeliver(f) {
 		return allowedToBroadcast, true, nil
