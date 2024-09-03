@@ -88,36 +88,77 @@ func TestBroadcast(t *testing.T) {
 	})
 }
 
-func TestDeliverAfter2fPlus1(t *testing.T) {
-	a := assert.New(t)
-	engines := loadGuardians(a)
-	e1, e2, e3 := engines[0], engines[1], engines[2]
+func TestDeliver(t *testing.T) {
+	t.Run("After2fPlus1Messages", func(t *testing.T) {
+		a := assert.New(t)
+		engines := loadGuardians(a)
+		e1, e2, e3 := engines[0], engines[1], engines[2]
 
-	// two different signers on an echo, meaning it will receive from two players.
-	// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
-	parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
+		// two different signers on an echo, meaning it will receive from two players.
+		// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
+		parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
 
-	echo := parsedIntoEcho(a, e1, parsed1)
-	a.NoError(e2.signEcho(echo))
+		echo := parsedIntoEcho(a, e1, parsed1)
+		a.NoError(e2.signEcho(echo))
 
-	shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
-	a.NoError(err)
-	a.False(shouldBroadcast)
-	a.False(shouldDeliver)
+		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
+		a.NoError(err)
+		a.False(shouldBroadcast)
+		a.False(shouldDeliver)
 
-	a.NoError(e3.signEcho(echo))
+		a.NoError(e3.signEcho(echo))
 
-	shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-	a.NoError(err)
-	a.True(shouldBroadcast)
-	a.False(shouldDeliver)
+		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+		a.NoError(err)
+		a.True(shouldBroadcast)
+		a.False(shouldDeliver)
 
-	a.NoError(e1.signEcho(echo))
+		a.NoError(e1.signEcho(echo))
 
-	shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-	a.NoError(err)
-	a.False(shouldBroadcast)
-	a.True(shouldDeliver)
+		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+		a.NoError(err)
+		a.False(shouldBroadcast)
+		a.True(shouldDeliver)
+	})
+
+	t.Run("doesn'tDeliverTwice", func(t *testing.T) {
+		a := assert.New(t)
+		engines := loadGuardians(a)
+		e1, e2, e3, e4 := engines[0], engines[1], engines[2], engines[3]
+
+		// two different signers on an echo, meaning it will receive from two players.
+		// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
+		parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
+
+		echo := parsedIntoEcho(a, e1, parsed1)
+		a.NoError(e2.signEcho(echo))
+
+		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
+		a.NoError(err)
+		a.False(shouldBroadcast)
+		a.False(shouldDeliver)
+
+		a.NoError(e3.signEcho(echo))
+
+		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+		a.NoError(err)
+		a.True(shouldBroadcast)
+		a.False(shouldDeliver)
+
+		a.NoError(e1.signEcho(echo))
+
+		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+		a.NoError(err)
+		a.False(shouldBroadcast)
+		a.True(shouldDeliver)
+
+		a.NoError(e4.signEcho(echo))
+
+		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+		a.NoError(err)
+		a.False(shouldBroadcast)
+		a.False(shouldDeliver)
+	})
 }
 
 func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
@@ -137,7 +178,6 @@ func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
 }
 
 func TestEquivocation(t *testing.T) {
-
 	t.Run("inBroadcastLogic", func(t *testing.T) {
 		a := assert.New(t)
 		engines := loadGuardians(a)

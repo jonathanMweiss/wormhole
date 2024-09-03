@@ -68,6 +68,7 @@ func TestMarshalPK(t *testing.T) {
 }
 
 func TestSetUpGroup(t *testing.T) {
+	t.SkipNow() // manual test only.
 	a := assert.New(t)
 
 	all := setupPlayers(a)
