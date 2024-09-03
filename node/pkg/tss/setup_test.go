@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path"
 	"sort"
 	"strconv"
 	"testing"
@@ -154,10 +152,11 @@ keygenLoop:
 		a.NoError(err)
 		fmt.Println(string(bts))
 
-		guardianStorageFilePath := path.Join(path.Dir(testutils.MustGetMockGuardianTssStorage()), fmt.Sprintf("guardian%d.json", i))
+		_ = i
+		// guardianStorageFilePath := path.Join(path.Dir(testutils.MustGetMockGuardianTssStorage()), fmt.Sprintf("guardian%d.json", i))
 
-		err = os.WriteFile(guardianStorageFilePath, bts, 0777)
-		a.NoError(err)
+		// err = os.WriteFile(guardianStorageFilePath, bts, 0777)
+		// a.NoError(err)
 	}
 
 }

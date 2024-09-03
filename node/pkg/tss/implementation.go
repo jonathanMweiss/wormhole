@@ -17,6 +17,7 @@ import (
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/tss"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type symKey []byte
@@ -259,7 +260,7 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 	}, nil
 }
 
-func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage) {
+func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage) (myEcho *gossipv1.GossipMessage_TssMessage) {
 	if t == nil {
 		return
 	}
@@ -268,21 +269,66 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 	case *gossipv1.PropagatedMessage_Unicast:
 		if err := t.handleUnicast(m); err != nil {
 			// TODO: log?
+			return
 		}
 	case *gossipv1.PropagatedMessage_Echo:
-		parsed, err := t.parseEcho(m)
+		// fmt.Printf("guardian %v received from %v: %v\n", t.GuardianStorage.Self.Index, parsed.GetFrom().Index, parsed.Type())
+		shouldEcho, err := t.handleEcho(m)
 		if err != nil {
+			// TODO: log?
+		}
+
+		if !shouldEcho {
 			return
 		}
 
-		// TODO: IN HERE YOU INSERT THE RELIABLE BROADCAST
-		// TODO: add the uuid of this message to the set of received messages.
-
-		// fmt.Printf("guardian %v received from %v: %v\n", t.GuardianStorage.Self.Index, parsed.GetFrom().Index, parsed.Type())
-		if err := t.fp.Update(parsed); err != nil {
-			// TODO: log?
+		echo := proto.Clone(m.Echo).(*gossipv1.Echo)
+		if err := t.signEcho(echo); err != nil {
+			return
 		}
+		myEcho = &gossipv1.GossipMessage_TssMessage{
+			TssMessage: &gossipv1.PropagatedMessage{
+				Payload: &gossipv1.PropagatedMessage_Echo{
+					Echo: echo,
+				},
+			},
+		}
+
+		return
 	}
+
+	return
+}
+
+func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
+	parsed, err := t.parseEcho(m)
+	if err != nil {
+		return false, fmt.Errorf("couldn't parse echo: %w", err)
+	}
+
+	rnd, err := getRound(parsed)
+	if err != nil {
+		return false, fmt.Errorf("couldn't extract round from echo: %w", err)
+	}
+
+	if rnd == round1Message1 && rnd == round2Message {
+		return false, fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
+	}
+
+	shouldEcho, shouldDeliver, err := t.relbroadcastInspection(parsed, m.Echo)
+	if err != nil {
+		return false, fmt.Errorf("reliable broadcast inspection issue: %w", err)
+	}
+
+	if !shouldDeliver {
+		return shouldEcho, nil
+	}
+
+	if err := t.fp.Update(parsed); err != nil {
+		return shouldEcho, fmt.Errorf("failed to update the full party: %w", err)
+	}
+
+	return shouldEcho, nil
 }
 
 func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {

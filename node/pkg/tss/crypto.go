@@ -30,6 +30,10 @@ func (st *GuardianStorage) verifyEcho(msg *gossipv1.Echo) error {
 	// TODO
 	return nil
 }
+func (t *Engine) signEcho(msg *gossipv1.Echo) error {
+	// TODO
+	return nil
+}
 
 func (st *GuardianStorage) verifySignedMessage(msg *gossipv1.SignedMessage) error {
 	// TODO
