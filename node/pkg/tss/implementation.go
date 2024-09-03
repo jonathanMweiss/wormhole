@@ -35,8 +35,6 @@ type Engine struct {
 	fpSigOutChan chan *common.SignatureData
 	fpErrChannel chan *tss.Error
 
-	ethSigOutChan chan *[]byte
-
 	gossipOutChan chan *gossipv1.GossipMessage
 
 	started         bool
@@ -268,7 +266,9 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 
 	switch m := msg.TssMessage.Payload.(type) {
 	case *gossipv1.PropagatedMessage_Unicast:
-		t.handleUnicast(m)
+		if err := t.handleUnicast(m); err != nil {
+			// TODO: log?
+		}
 	case *gossipv1.PropagatedMessage_Echo:
 		parsed, err := t.parseEcho(m)
 		if err != nil {
@@ -279,28 +279,60 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 		// TODO: add the uuid of this message to the set of received messages.
 
 		// fmt.Printf("guardian %v received from %v: %v\n", t.GuardianStorage.Self.Index, parsed.GetFrom().Index, parsed.Type())
-		t.fp.Update(parsed)
+		if err := t.fp.Update(parsed); err != nil {
+			// TODO: log?
+		}
 	}
 }
 
-func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) {
+func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {
 	parsed, err := t.parseUnicast(m)
 	if err != nil {
-		return // TODO: log the error.
+		return fmt.Errorf("malformed message: %w", err)
 	}
 
 	rnd, err := getRound(parsed)
 	if err != nil {
-		return // TODO
+		return fmt.Errorf("couldn't extract round from unicast: %w", err)
 	}
 
 	// only round 1 and round 2 are unicasts.
 	if rnd != round1Message1 && rnd != round2Message {
-		return // TODO log the error.
+		return fmt.Errorf("unicast cannot receive messages from round: %s", rnd) // Malicious?
 	}
 
-	t.fp.Update(parsed)
-	return
+	if err := t.validateUnicastDoesntExist(parsed, m); err != nil {
+		return fmt.Errorf("failed to ensure no equivication present in unicast: %w", err)
+	}
+
+	if err := t.fp.Update(parsed); err != nil {
+		return fmt.Errorf("failed to update the full party: %w", err)
+	}
+
+	return nil
+}
+
+func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage, m *gossipv1.PropagatedMessage_Unicast) error {
+	id, err := t.getMessageUUID(parsed)
+	if err != nil {
+		return err
+	}
+
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+	if _, ok := t.received[id]; ok {
+		return fmt.Errorf("equivocation detected")
+	}
+
+	t.received[id] = &broadcaststate{
+		timeReceived:  time.Now(), // used for GC.
+		message:       nil,        // no need to store the content.
+		votes:         nil,        // no votes should be stored for a unicast.
+		echoedAlready: true,       // ensuring this never echoed since it is a unicast.
+		mtx:           nil,        // no need to lock this, just store it.
+	}
+
+	return nil
 }
 
 func (t *Engine) parseEcho(m *gossipv1.PropagatedMessage_Echo) (tss.ParsedMessage, error) {
@@ -323,10 +355,28 @@ func (t *Engine) parseEcho(m *gossipv1.PropagatedMessage_Echo) (tss.ParsedMessag
 }
 
 // SECURITY NOTE: this function ensure no equivocation.
-func getParsedMessageID() {
-	// TODO: create this function.
-	// compromised not from content but from digest this sig is being worked on, and the round.
-	// doing so we ensure no equivication. In addition, we hide the session ID using the loadBalancingKey.
+func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
+	// We don't add the content of the message to the uuid, othewrwise we won't be able to detect equivocations.
+
+	d := append([]byte("tssMsgUUID:"), t.GuardianStorage.LoadDistributionKey...)
+
+	// Since the digest of a parsedMessage is tied to the run of the protocol for a single signature, we use it as a sessionId
+	d = append(d, msg.WireMsg().Digest[:]...)
+
+	// adding the sender, ensuring it is tied to the message.
+	d = append(d, msg.GetFrom().Key...)
+	d = append(d, []byte(msg.GetFrom().Id)...)
+
+	// Adding the round to ensure no equivocation. That is,
+	// we mustn't allow some sender j to send two different messages to the same round, in the same SessionID.
+	rnd, err := getRound(msg)
+	if err != nil {
+		return digest{}, err
+	}
+	d = append(d, []byte(rnd)...)
+
+	return hash(d), nil
+
 }
 
 func (t *Engine) parseUnicast(m *gossipv1.PropagatedMessage_Unicast) (tss.ParsedMessage, error) {
