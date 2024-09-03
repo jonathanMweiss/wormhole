@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"testing"
@@ -145,18 +146,28 @@ keygenLoop:
 		}
 	}
 
+	// shared across all guardians.
+	loadBalancingKey := make([]byte, 32)
+	_, err := rand.Read(loadBalancingKey)
+	a.NoError(err)
+
 	for i, guardian := range guardians {
 		a.NotNil(guardian)
 		a.NoError(guardian.createSharedSecrets())
+
+		tmp := make([]byte, 32)
+		copy(tmp, loadBalancingKey)
+		guardian.LoadDistributionKey = tmp
+
 		bts, err := json.MarshalIndent(guardian, "", "  ")
 		a.NoError(err)
 		fmt.Println(string(bts))
 
-		_ = i
-		// guardianStorageFilePath := path.Join(path.Dir(testutils.MustGetMockGuardianTssStorage()), fmt.Sprintf("guardian%d.json", i))
+		guardianStorageFilePath, err := testutils.GetMockGuardianTssStorage(i)
+		a.NoError(err)
 
-		// err = os.WriteFile(guardianStorageFilePath, bts, 0777)
-		// a.NoError(err)
+		err = os.WriteFile(guardianStorageFilePath, bts, 0777)
+		a.NoError(err)
 	}
 
 }
@@ -253,5 +264,7 @@ func (player *dkgSetupPlayer) handleKeygenEndMessage(m *keygen.LocalPartySaveDat
 		SecretKey:             player.SecretKey,
 		Threshold:             Threshold,
 		SavedSecretParameters: m,
+
+		LoadDistributionKey: []byte{},
 	}
 }
