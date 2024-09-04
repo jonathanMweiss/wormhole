@@ -31,12 +31,13 @@ type Engine struct {
 	GuardianStorage
 
 	fp party.FullParty
-	//
-	fpOutChan    chan tss.Message // this one must listen on it, and output to the p2p network.
-	fpSigOutChan chan *common.SignatureData
-	fpErrChannel chan *tss.Error
 
-	gossipOutChan chan *gossipv1.GossipMessage
+	// TODO We must ensure someone ALWAYS listens on these channels, and does nothing else.
+	// Otherwise, we might have a circular dependancy blocking the engine/FullParty from working.
+	fpOutChan      chan tss.Message
+	fpSigOutChan   chan *common.SignatureData
+	messageOutChan chan *gossipv1.GossipMessage
+	fpErrChannel   chan *tss.Error // used to log issues from the FullParty.
 
 	started         bool
 	msgSerialNumber uint64
@@ -98,7 +99,7 @@ func (t *Engine) ProducedSignature() <-chan *common.SignatureData {
 
 // ProducedOutputMessages ensures a listener can send the output messages to the network.
 func (t *Engine) ProducedOutputMessages() <-chan *gossipv1.GossipMessage {
-	return t.gossipOutChan
+	return t.messageOutChan
 }
 
 // BeginAsyncThresholdSigningProtocol used to start the TSS protocol over a specific msg.
@@ -159,7 +160,7 @@ func NewReliableTSS(storage *GuardianStorage) (*Engine, error) {
 		fpOutChan:       fpOutChan,
 		fpSigOutChan:    fpSigOutChan,
 		fpErrChannel:    fpErrChannel,
-		gossipOutChan:   make(chan *gossipv1.GossipMessage),
+		messageOutChan:  make(chan *gossipv1.GossipMessage),
 		started:         false,
 		msgSerialNumber: 0,
 		mtx:             &sync.Mutex{},
@@ -212,7 +213,7 @@ func (t *Engine) fpListener() {
 
 			// todo: ensure someone listens to this channel.
 			//todo: wrap the message into a gossip message and output it to the network, sign (or encrypt and mac) it and send it.
-			t.gossipOutChan <- tssMsg
+			t.messageOutChan <- tssMsg
 			// fmt.Printf("guardian %v sent %v \n", t.GuardianStorage.Self.Index, m.Type())
 		case err := <-t.fpErrChannel:
 			_ = err // todo: log the error?
@@ -240,15 +241,15 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 		Authentication:  nil,
 	}
 
-	tssMsg := &gossipv1.PropagatedMessage{}
+	tssMsg := &gossipv1.PropagatedMessage{} // TODO: Once we use dedicated connections, we can remove this wrapper message.
 
 	if routing.IsBroadcast || len(routing.To) == 0 || len(routing.To) > 1 {
 		t.sign(msgToSend)
 		tssMsg.Payload = &gossipv1.PropagatedMessage_Echo{
 			Echo: &gossipv1.Echo{
 				Message:   msgToSend,
-				Signature: nil, //  No sig here, it means this is the original sender of the message, and not a vote.
-				Echoer:    nil,
+				Signature: nil, // TODO: Once we use two-way-TLS, we can remove this field (just ensure we receive the message from the correct grpc stream).
+				Echoer:    partyIdToProto(m.GetFrom()),
 			},
 		}
 	} else {
@@ -265,7 +266,7 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 	}, nil
 }
 
-func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage) (myEcho *gossipv1.GossipMessage_TssMessage) {
+func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage) {
 	if t == nil {
 		return
 	}
@@ -287,22 +288,33 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 			return
 		}
 
-		echo, _ := proto.Clone(m.Echo).(*gossipv1.Echo)
-		if err := t.signEcho(echo); err != nil {
-			return
+		if err := t.sendEchoOut(m); err != nil {
+			return // TODO log.
 		}
-		myEcho = &gossipv1.GossipMessage_TssMessage{
+	}
+}
+
+func (t *Engine) sendEchoOut(m *gossipv1.PropagatedMessage_Echo) error {
+	echo, _ := proto.Clone(m.Echo).(*gossipv1.Echo)
+	if err := t.signEcho(echo); err != nil {
+		return err
+	}
+
+	select {
+	case <-t.ctx.Done():
+		return t.ctx.Err()
+	case t.messageOutChan <- &gossipv1.GossipMessage{
+		Message: &gossipv1.GossipMessage_TssMessage{
 			TssMessage: &gossipv1.PropagatedMessage{
 				Payload: &gossipv1.PropagatedMessage_Echo{
 					Echo: echo,
 				},
 			},
-		}
-
-		return
+		},
+	}:
 	}
 
-	return
+	return nil
 }
 
 var ErrBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
