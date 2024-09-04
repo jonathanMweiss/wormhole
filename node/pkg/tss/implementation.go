@@ -359,6 +359,9 @@ func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {
 	parsed, err := t.parseUnicast(m)
 	if err != nil {
+		if err == errUnicastNotForMe {
+			return nil
+		}
 		return fmt.Errorf("malformed message: %w", err)
 	}
 
@@ -438,7 +441,11 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 	d := append([]byte("tssMsgUUID:"), t.GuardianStorage.LoadDistributionKey...)
 
 	// Since the digest of a parsedMessage is tied to the run of the protocol for a single signature, we use it as a sessionId
-	d = append(d, msg.WireMsg().Digest[:]...)
+	msgdgst := msg.WireMsg().Digest
+	cpy := make([]byte, len(msgdgst))
+	copy(cpy, msgdgst)
+
+	d = append(d, cpy...)
 
 	// adding the sender, ensuring it is tied to the message.
 	d = append(d, msg.GetFrom().Key...)
@@ -456,6 +463,8 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 
 }
 
+var errUnicastNotForMe = fmt.Errorf("unicast message is not for me")
+
 func (t *Engine) parseUnicast(m *gossipv1.PropagatedMessage_Unicast) (tss.ParsedMessage, error) {
 	msg := m.Unicast
 
@@ -464,7 +473,7 @@ func (t *Engine) parseUnicast(m *gossipv1.PropagatedMessage_Unicast) (tss.Parsed
 	}
 
 	if !t.isUnicastForMe(msg) {
-		return nil, fmt.Errorf("unicast message is not for me") // not sure if needs an error.
+		return nil, errUnicastNotForMe
 	}
 
 	senderPid := protoToPartyId(msg.Sender)

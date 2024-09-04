@@ -1,12 +1,17 @@
 package tss
 
 import (
+	"context"
+	"fmt"
 	"math/big"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
 )
@@ -207,6 +212,41 @@ func TestEquivocation(t *testing.T) {
 	})
 }
 
+func TestE2E(t *testing.T) {
+	// Setting up 5 engines, each with a different guardian storage.
+	// all will attempt to sign a single message, while outputing messages to each other,
+	// and reliably broadcasting them.
+
+	a := assert.New(t)
+	engines := loadGuardians(a)
+
+	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*60)
+	defer cancel() // ensures all engines will stop (avoid dangling goroutines).
+
+	fmt.Println("starting engines.")
+	for _, engine := range engines {
+		a.NoError(engine.Start(ctx))
+	}
+
+	fmt.Println("msgHandler settup:")
+	dnchn := msgHandler(a, ctx, engines)
+
+	fmt.Println("engines started, requesting sigs")
+	// all engines are started, now we can begin the protocol.
+	for _, engine := range engines {
+		tmp := make([]byte, 32)
+		copy(tmp, dgst[:])
+		engine.BeginAsyncThresholdSigningProtocol(tmp)
+	}
+	select {
+	case <-dnchn:
+	case <-ctx.Done():
+		t.FailNow()
+	}
+}
+
 func loadGuardians(a *assert.Assertions) []*Engine {
 	engines := make([]*Engine, Participants)
 
@@ -217,4 +257,65 @@ func loadGuardians(a *assert.Assertions) []*Engine {
 	}
 
 	return engines
+}
+
+func msgHandler(a *assert.Assertions, ctx context.Context, engines []*Engine) chan struct{} {
+	signalSuccess := make(chan struct{})
+	once := sync.Once{}
+
+	go func() {
+		wg := sync.WaitGroup{}
+		wg.Add(len(engines) * 2)
+
+		chns := make([]chan *gossipv1.GossipMessage_TssMessage, len(engines))
+		for i := range chns {
+			chns[i] = make(chan *gossipv1.GossipMessage_TssMessage, 10000)
+		}
+
+		for i, e := range engines {
+			i, engine := i, e
+
+			// need a separate goroutine for handling engine output and engine input.
+			// simulating network stream incoming and network stream outgoing.
+
+			// incoming
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-signalSuccess:
+						return
+					case msg := <-chns[i]:
+						engine.HandleIncomingTssMessage(msg)
+					}
+				}
+			}()
+
+			//  Listener, responsible to receive output of engine, and direct it to the other engines.
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case m := <-engine.ProducedOutputMessages():
+						for _, feedChn := range chns { // treating everything as broadcast for ease of use.
+							feedChn <- m.Message.(*gossipv1.GossipMessage_TssMessage)
+						}
+					case <-engine.ProducedSignature():
+						once.Do(func() { close(signalSuccess) })
+						return // TODO verify signature.
+					case <-signalSuccess:
+						return
+					}
+				}
+			}()
+		}
+
+		wg.Wait()
+	}()
+
+	return signalSuccess
 }

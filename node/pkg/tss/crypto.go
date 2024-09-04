@@ -18,12 +18,23 @@ func (t *Engine) authAndDecrypt(maccedMsg *gossipv1.SignedMessage) error {
 	return nil
 }
 
-func (t *Engine) encryptAndMac(msgToSend *gossipv1.SignedMessage) {
-	// TODO
+func (t *Engine) encryptAndMac(msg *gossipv1.SignedMessage) {
+	if msg.Sender == nil {
+		msg.Sender = partyIdToProto(t.Self)
+	}
+
+	msg.Authentication = &gossipv1.SignedMessage_MAC{
+		MAC: []byte("signature"),
+	}
 }
 
 func (t *Engine) sign(msg *gossipv1.SignedMessage) {
-	// TODO
+	if msg.Sender == nil {
+		msg.Sender = partyIdToProto(t.Self)
+	}
+	msg.Authentication = &gossipv1.SignedMessage_Signature{
+		Signature: []byte("signature"),
+	}
 }
 
 func (st *GuardianStorage) verifyEcho(msg *gossipv1.Echo) error {
@@ -32,6 +43,7 @@ func (st *GuardianStorage) verifyEcho(msg *gossipv1.Echo) error {
 }
 func (t *Engine) signEcho(msg *gossipv1.Echo) error {
 	msg.Echoer = partyIdToProto(t.Self)
+	msg.Signature = []byte("signature")
 	return nil
 }
 
