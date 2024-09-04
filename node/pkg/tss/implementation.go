@@ -245,13 +245,20 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 
 	if routing.IsBroadcast || len(routing.To) == 0 || len(routing.To) > 1 {
 		t.sign(msgToSend)
-		tssMsg.Payload = &gossipv1.PropagatedMessage_Echo{
+		echo := &gossipv1.PropagatedMessage_Echo{
 			Echo: &gossipv1.Echo{
 				Message:   msgToSend,
 				Signature: nil, // TODO: Once we use two-way-TLS, we can remove this field (just ensure we receive the message from the correct grpc stream).
 				Echoer:    partyIdToProto(m.GetFrom()),
 			},
 		}
+
+		if err := t.signEcho(echo.Echo); err != nil {
+			return nil, err
+		}
+
+		tssMsg.Payload = echo
+
 	} else {
 		t.encryptAndMac(msgToSend) // TODO: remove this since we plan on using two-way-TLS connections.
 		tssMsg.Payload = &gossipv1.PropagatedMessage_Unicast{
@@ -278,7 +285,6 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 			return
 		}
 	case *gossipv1.PropagatedMessage_Echo:
-		// fmt.Printf("guardian %v received from %v: %v\n", t.GuardianStorage.Self.Index, parsed.GetFrom().Index, parsed.Type())
 		shouldEcho, err := t.handleEcho(m)
 		if err != nil {
 			// TODO: log?
@@ -413,7 +419,7 @@ func (t *Engine) parseEcho(m *gossipv1.PropagatedMessage_Echo) (tss.ParsedMessag
 		return nil, err
 	}
 
-	if t.GuardianStorage.contains(protoToPartyId(echoMsg.Echoer)) {
+	if !t.GuardianStorage.contains(protoToPartyId(echoMsg.Echoer)) {
 		return nil, ErrUnkownEchoer
 	}
 

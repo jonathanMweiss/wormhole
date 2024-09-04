@@ -33,13 +33,14 @@ func partyIdToProto(pid *tss.PartyID) *gossipv1.PartyId {
 }
 
 var (
-	ErrEchoIsNil          = fmt.Errorf("echo is nil")
-	ErrNoEchoSignature    = fmt.Errorf("echo doesn't contain a signature")
-	ErrNilPartyId         = fmt.Errorf("party id is nil")
-	ErrEmptyIDInPID       = fmt.Errorf("partyId identifier is empty")
-	ErrEmptyKeyInPID      = fmt.Errorf("partyId doesn't contain a key")
-	ErrSignedMessageIsNil = fmt.Errorf("SignedMessage is nil")
-	ErrNilPayload         = fmt.Errorf("SignedMessage doesn't contain a payload")
+	ErrEchoIsNil             = fmt.Errorf("echo is nil")
+	ErrNoEchoSignature       = fmt.Errorf("echo doesn't contain a signature")
+	ErrNoAuthenticationField = fmt.Errorf("SignedMessage doesn't contain an authentication field")
+	ErrNilPartyId            = fmt.Errorf("party id is nil")
+	ErrEmptyIDInPID          = fmt.Errorf("partyId identifier is empty")
+	ErrEmptyKeyInPID         = fmt.Errorf("partyId doesn't contain a key")
+	ErrSignedMessageIsNil    = fmt.Errorf("SignedMessage is nil")
+	ErrNilPayload            = fmt.Errorf("SignedMessage doesn't contain a payload")
 )
 
 func vaidateEchoCorrectForm(e *gossipv1.Echo) error {
@@ -96,6 +97,18 @@ func validateSignedMessageCorrectForm(m *gossipv1.SignedMessage) error {
 		if err := validatePartIdProtoCorrectForm(v); err != nil {
 			return err
 		}
+	}
+
+	if m.Authentication == nil {
+		return ErrNoAuthenticationField
+	}
+
+	if s, ok := m.Authentication.(*gossipv1.SignedMessage_Signature); ok && s.Signature == nil {
+		return ErrNoAuthenticationField
+	}
+
+	if mac, ok := m.Authentication.(*gossipv1.SignedMessage_MAC); ok && mac.MAC == nil {
+		return ErrNoAuthenticationField
 	}
 
 	return nil
