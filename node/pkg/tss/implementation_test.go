@@ -187,16 +187,20 @@ func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
 	a := assert.New(t)
 	engines := loadGuardians(a)
 	e1 := engines[0]
+	for i, rnd := range allRounds {
+		trackingId := party.Digest{byte(i)}
 
-	// this is used as session ID, and was added by us specifically to each message, to ensure two sessions differ.
-	// Changing this, is like looking at a whole different session, where signature is required over another message.
-	OriginalMessageDigest := big.NewInt(0)
-	uid1, err := e1.getMessageUUID(signing.NewSignRound3Message(e1.Self, big.NewInt(0), OriginalMessageDigest))
-	a.NoError(err)
+		// each message is generated with some random content inside.
+		parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, trackingId)
+		parsed2 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, trackingId)
 
-	uid2, err := e1.getMessageUUID(signing.NewSignRound3Message(e1.Self, big.NewInt(1), OriginalMessageDigest))
-	a.NoError(err)
-	a.Equal(uid1, uid2)
+		uid1, err := e1.getMessageUUID(parsed1)
+		a.NoError(err)
+
+		uid2, err := e1.getMessageUUID(parsed2)
+		a.NoError(err)
+		a.Equal(uid1, uid2)
+	}
 }
 
 func TestEquivocation(t *testing.T) {
@@ -205,27 +209,24 @@ func TestEquivocation(t *testing.T) {
 		engines := loadGuardians(a)
 		e1, e2 := engines[0], engines[1]
 
-		// two different signers on an echo, meaning it will receive from two players.
-		// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
+		for i, rndType := range allRounds {
 
-		// this is used as session ID, and was added by us specifically to each message, to ensure two sessions differ.
-		// Changing this, is like looking at a whole different session, where signature is required over another message.
-		OriginalMessageDigest := big.NewInt(0)
+			trackingId := party.Digest{byte(i)}
 
-		parsed1 := signing.NewSignRound3Message(e2.Self, big.NewInt(0), OriginalMessageDigest)
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e2.Self, rndType, trackingId)
 
-		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, parsedIntoEcho(a, e2, parsed1))
-		a.NoError(err)
-		a.True(shouldBroadcast) //should broadcast since e2 is the source of this message.
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, parsedIntoEcho(a, e2, parsed1))
+			a.NoError(err)
+			a.True(shouldBroadcast) //should broadcast since e2 is the source of this message.
+			a.False(shouldDeliver)
 
-		// same digest, different message (same signature session, different message)
-		parsed2 := signing.NewSignRound3Message(e2.Self, big.NewInt(1), OriginalMessageDigest)
+			parsed2 := generateFakeMessageWithRandomContent(e1.Self, e2.Self, rndType, trackingId)
 
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed2, parsedIntoEcho(a, e2, parsed2))
-		a.ErrorAs(err, &ErrEquivicatingGuardian)
-		a.False(shouldBroadcast)
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed2, parsedIntoEcho(a, e2, parsed2))
+			a.ErrorAs(err, &ErrEquivicatingGuardian)
+			a.False(shouldBroadcast)
+			a.False(shouldDeliver)
+		}
 	})
 }
 
