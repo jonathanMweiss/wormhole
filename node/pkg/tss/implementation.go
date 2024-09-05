@@ -323,7 +323,7 @@ func (t *Engine) sendEchoOut(m *gossipv1.PropagatedMessage_Echo) error {
 	return nil
 }
 
-var ErrBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
+var errBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
 
 func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 	parsed, err := t.parseEcho(m)
@@ -337,7 +337,7 @@ func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 	}
 
 	if rnd == round1Message1 || rnd == round2Message {
-		return false, ErrBadRoundsInEcho
+		return false, errBadRoundsInEcho
 	}
 
 	shouldEcho, shouldDeliver, err := t.relbroadcastInspection(parsed, m.Echo)
@@ -356,6 +356,8 @@ func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 	return shouldEcho, nil
 }
 
+var errUnicastBadRound = fmt.Errorf("bad round for unicast (can accept round1Message1 and round2Message)")
+
 func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {
 	parsed, err := t.parseUnicast(m)
 	if err != nil {
@@ -372,7 +374,7 @@ func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {
 
 	// only round 1 and round 2 are unicasts.
 	if rnd != round1Message1 && rnd != round2Message {
-		return fmt.Errorf("unicast cannot receive messages from round: %s", rnd) // Malicious?
+		return errUnicastBadRound
 	}
 
 	if err := t.validateUnicastDoesntExist(parsed); err != nil {

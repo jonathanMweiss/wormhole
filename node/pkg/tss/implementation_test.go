@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,22 @@ import (
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
+)
+
+var (
+	unicastRounds   = []signingRound{round1Message1, round2Message}
+	broadcastRounds = []signingRound{
+		round1Message2,
+		round3Message,
+		round4Message,
+		round5Message,
+		round6Message,
+		round7Message,
+		round8Message,
+		round9Message,
+	}
+
+	allRounds = append(unicastRounds, broadcastRounds...)
 )
 
 func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
@@ -245,6 +262,115 @@ func TestE2E(t *testing.T) {
 	case <-ctx.Done():
 		t.FailNow()
 	}
+}
+
+func TestMessagesWithBadRounds(t *testing.T) {
+	a := assert.New(t)
+	gs := loadGuardians(a)
+	e1, e2 := gs[0], gs[1]
+	from := e1.Self
+	to := e2.Self
+
+	t.Run("Unicast", func(t *testing.T) {
+		msgDigest := party.Digest{1}
+		for _, rnd := range broadcastRounds {
+			parsed := generateFakeMessageWithRandomContent(from, to, rnd, msgDigest)
+			bts, _, err := parsed.WireBytes()
+			a.NoError(err)
+
+			m := &gossipv1.PropagatedMessage_Unicast{
+				Unicast: &gossipv1.SignedMessage{
+					Payload:         bts,
+					Sender:          partyIdToProto(from),
+					Recipients:      []*gossipv1.PartyId{partyIdToProto(to)},
+					MsgSerialNumber: 0,
+					Authentication: &gossipv1.SignedMessage_MAC{
+						MAC: []byte{1, 2, 3},
+					},
+				},
+			}
+			err = e2.handleUnicast(m)
+			a.ErrorIs(err, errUnicastBadRound)
+		}
+	})
+
+	t.Run("Echo", func(t *testing.T) {
+		msgDigest := party.Digest{2}
+		for _, rnd := range unicastRounds {
+			parsed := generateFakeMessageWithRandomContent(from, to, rnd, msgDigest)
+			bts, _, err := parsed.WireBytes()
+			a.NoError(err)
+
+			m := &gossipv1.PropagatedMessage_Echo{
+				Echo: &gossipv1.Echo{
+					Message: &gossipv1.SignedMessage{
+						Payload:         bts,
+						Sender:          partyIdToProto(from),
+						Recipients:      []*gossipv1.PartyId{partyIdToProto(to)},
+						MsgSerialNumber: 0,
+						Authentication: &gossipv1.SignedMessage_Signature{
+							Signature: []byte{1, 2, 3},
+						},
+					},
+					Signature: []byte{1, 2, 3},
+					Echoer:    partyIdToProto(from),
+				},
+			}
+			_, err = e2.handleEcho(m)
+			a.ErrorIs(err, errBadRoundsInEcho)
+		}
+	})
+}
+
+// if to == nil it's a broadcast message.
+func generateFakeMessageWithRandomContent(from, to *tss.PartyID, rnd signingRound, digest party.Digest) tss.ParsedMessage {
+	trackingId := &big.Int{}
+	trackingId.SetBytes(digest[:])
+
+	rndmBigNumber := &big.Int{}
+	buf := make([]byte, 16)
+	rand.Read(buf)
+	rndmBigNumber.SetBytes(buf)
+
+	var (
+		meta    = tss.MessageRouting{From: from, IsBroadcast: true}
+		content tss.MessageContent
+	)
+
+	switch rnd {
+	case round1Message1:
+		if to == nil {
+			panic("not a broadcast message")
+		}
+		meta = tss.MessageRouting{From: from, To: []*tss.PartyID{to}, IsBroadcast: false}
+		content = &signing.SignRound1Message1{C: rndmBigNumber.Bytes()}
+	case round1Message2:
+		content = &signing.SignRound1Message2{Commitment: rndmBigNumber.Bytes()}
+	case round2Message:
+		if to == nil {
+			panic("not a broadcast message")
+		}
+		meta = tss.MessageRouting{From: from, To: []*tss.PartyID{to}, IsBroadcast: false}
+		content = &signing.SignRound2Message{C1: rndmBigNumber.Bytes()}
+	case round3Message:
+		content = &signing.SignRound3Message{Theta: rndmBigNumber.Bytes()}
+	case round4Message:
+		content = &signing.SignRound4Message{ProofAlphaX: rndmBigNumber.Bytes()}
+	case round5Message:
+		content = &signing.SignRound5Message{Commitment: rndmBigNumber.Bytes()}
+	case round6Message:
+		content = &signing.SignRound6Message{ProofAlphaX: rndmBigNumber.Bytes()}
+	case round7Message:
+		content = &signing.SignRound7Message{Commitment: rndmBigNumber.Bytes()}
+	case round8Message:
+		content = &signing.SignRound8Message{DeCommitment: [][]byte{rndmBigNumber.Bytes()}}
+	case round9Message:
+		content = &signing.SignRound9Message{S: rndmBigNumber.Bytes()}
+	default:
+		panic("unknown round")
+	}
+
+	return tss.NewMessage(meta, content, tss.NewMessageWrapper(meta, content, trackingId.Bytes()...))
 }
 
 func loadGuardians(a *assert.Assertions) []*Engine {
