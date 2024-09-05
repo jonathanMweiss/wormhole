@@ -228,8 +228,46 @@ func TestEquivocation(t *testing.T) {
 			a.False(shouldDeliver)
 		}
 	})
+
+	t.Run("inUnicast", func(t *testing.T) {
+		a := assert.New(t)
+		engines := loadGuardians(a)
+		e1, e2 := engines[0], engines[1]
+
+		for i, rndType := range unicastRounds {
+
+			trackingId := party.Digest{byte(i)}
+
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e2.Self, rndType, trackingId)
+			parsed2 := generateFakeMessageWithRandomContent(e1.Self, e2.Self, rndType, trackingId)
+
+			bts, _, err := parsed1.WireBytes()
+			a.NoError(err)
+			msg := &gossipv1.PropagatedMessage_Unicast{
+				Unicast: &gossipv1.SignedMessage{
+					Payload:         bts,
+					Sender:          partyIdToProto(e1.Self),
+					Recipients:      []*gossipv1.PartyId{partyIdToProto(e2.Self)},
+					MsgSerialNumber: 0,
+					Authentication: &gossipv1.SignedMessage_MAC{
+						MAC: []byte{1, 2, 3},
+					},
+				},
+			}
+
+			e2.handleUnicast(msg)
+
+			bts, _, err = parsed2.WireBytes()
+			a.NoError(err)
+			msg.Unicast.Payload = bts
+			a.ErrorIs(e2.handleUnicast(msg), ErrEquivicatingGuardian)
+		}
+	})
 }
 
+func TestBadSignatures(t *testing.T) {
+	t.FailNow() // TODO
+}
 func TestE2E(t *testing.T) {
 	// Setting up 5 engines, each with a different guardian storage.
 	// all will attempt to sign a single message, while outputing messages to each other,
