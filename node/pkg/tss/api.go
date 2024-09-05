@@ -12,8 +12,6 @@ import (
 // ReliableMessageHandler is the interface to give any component with the ability to receive over the network incoming TSS messages.
 type ReliableMessageHandler interface {
 	// HandleIncomingTssMessage receives a network message and process it using a reliable-broadcast protocol.
-	// the returned value is an echo that should be broadcasted on the network.
-	// if it is nil - nothing to broadcast.
 	HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage)
 	ProducedOutputMessages() <-chan *gossipv1.GossipMessage // just need to propagate this through the p2p network
 }
