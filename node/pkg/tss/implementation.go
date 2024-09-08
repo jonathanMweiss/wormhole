@@ -9,7 +9,6 @@ import (
 	"time"
 
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
-	"github.com/certusone/wormhole/node/pkg/supervisor"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/yossigi/tss-lib/v2/common"
@@ -181,10 +180,10 @@ func (t *Engine) Start(ctx context.Context) error {
 		return fmt.Errorf("tss engine has already started")
 	}
 
-	logger := supervisor.Logger(ctx)
+	// logger := supervisor.Logger(ctx)
 
 	t.ctx = ctx
-	t.logger = logger
+	// t.logger = logger
 
 	if err := t.fp.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
 		t.started.Store(notStarted)
@@ -194,7 +193,7 @@ func (t *Engine) Start(ctx context.Context) error {
 
 	go t.fpListener()
 
-	t.logger.Info("tss engine started")
+	// t.logger.Info("tss engine started")
 
 	return nil
 }
@@ -221,17 +220,18 @@ func (t *Engine) fpListener() {
 		case m := <-t.fpOutChan:
 			tssMsg, err := t.intoGossipMessage(m)
 			if err != nil {
-				t.logger.Error(
-					"failed to convert tss message to gossip message",
-					zap.Error(err),
-				)
+				// t.logger.Error(
+				// 	"failed to convert tss message to gossip message",
+				// 	zap.Error(err),
+				// )
 				continue
 			}
 
 			t.messageOutChan <- tssMsg
 		case err := <-t.fpErrChannel:
+			_ = err
 			// TODO: Ensure that fullParty errors contain trackingId.
-			t.logger.Error("Error while generating TSS signature", zap.Error(err))
+			// t.logger.Error("Error while generating TSS signature", zap.Error(err))
 		}
 	}
 }
@@ -298,13 +298,13 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 	switch m := msg.TssMessage.Payload.(type) {
 	case *gossipv1.PropagatedMessage_Unicast:
 		if err := t.handleUnicast(m); err != nil {
-			t.logger.Error("issue while handling unicast", zap.Error(err))
+			// t.logger.Error("issue while handling unicast", zap.Error(err))
 			return
 		}
 	case *gossipv1.PropagatedMessage_Echo:
 		shouldEcho, err := t.handleEcho(m)
 		if err != nil {
-			t.logger.Error("issue while handling echo", zap.Error(err))
+			// t.logger.Error("issue while handling echo", zap.Error(err))
 			return
 		}
 
@@ -313,7 +313,7 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 		}
 
 		if err := t.sendEchoOut(m); err != nil {
-			t.logger.Error("couldn't echo message", zap.Error(err))
+			// t.logger.Error("couldn't echo message", zap.Error(err))
 			return
 		}
 	}
