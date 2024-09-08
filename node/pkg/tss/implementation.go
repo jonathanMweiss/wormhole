@@ -9,6 +9,7 @@ import (
 	"time"
 
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
+	"github.com/certusone/wormhole/node/pkg/supervisor"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/yossigi/tss-lib/v2/common"
@@ -27,7 +28,7 @@ type symKey []byte
 type Engine struct {
 	ctx context.Context
 
-	logger zap.Logger
+	logger *zap.Logger
 	GuardianStorage
 
 	fp party.FullParty
@@ -154,7 +155,7 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 	t := &Engine{
 		ctx: nil,
 
-		logger:          zap.Logger{},
+		logger:          &zap.Logger{},
 		GuardianStorage: *storage,
 
 		fp:              fp,
@@ -182,15 +183,20 @@ func (t *Engine) Start(ctx context.Context) error {
 		return fmt.Errorf("tss engine has already started")
 	}
 
+	logger := supervisor.Logger(ctx)
+
 	t.ctx = ctx
+	t.logger = logger
 
 	if err := t.fp.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
 		t.started.Store(notStarted)
 		return err
 	}
-	//closing the t.fp.start inside th listener
+	// closing the t.fp.start inside th listener
 
 	go t.fpListener()
+
+	t.logger.Info("tss engine started")
 
 	return nil
 }
@@ -217,16 +223,17 @@ func (t *Engine) fpListener() {
 		case m := <-t.fpOutChan:
 			tssMsg, err := t.intoGossipMessage(m)
 			if err != nil {
-				continue // TODO: log the error.
+				t.logger.Error(
+					"failed to convert tss message to gossip message",
+					zap.Error(err),
+				)
+				continue
 			}
 
-			// todo: ensure someone listens to this channel.
-			//todo: wrap the message into a gossip message and output it to the network, sign (or encrypt and mac) it and send it.
 			t.messageOutChan <- tssMsg
-			// fmt.Printf("guardian %v sent %v \n", t.GuardianStorage.Self.Index, m.Type())
 		case err := <-t.fpErrChannel:
-			_ = err // todo: log the error?
-			// fmt.Printf("guardian %v received error %v \n", t.GuardianStorage.Self.Index, err)
+			// TODO: Do we need to add to the error the Digest that this error is related to?
+			t.logger.Error("Error while generating TSS signature", zap.Error(err))
 		}
 	}
 }
@@ -256,8 +263,10 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 		t.sign(msgToSend)
 		echo := &gossipv1.PropagatedMessage_Echo{
 			Echo: &gossipv1.Echo{
-				Message:   msgToSend,
-				Signature: nil, // TODO: Once we use two-way-TLS, we can remove this field (just ensure we receive the message from the correct grpc stream).
+				Message: msgToSend,
+				// TODO: Once we use two-way-TLS, we can remove this field
+				// (just ensure we receive the message from the correct grpc stream).
+				Signature: nil,
 				Echoer:    partyIdToProto(m.GetFrom()),
 			},
 		}
@@ -269,7 +278,8 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 		tssMsg.Payload = echo
 
 	} else {
-		t.encryptAndMac(msgToSend) // TODO: remove this since we plan on using two-way-TLS connections.
+		// TODO: remove this since we plan on using two-way-TLS connections.
+		t.encryptAndMac(msgToSend)
 		tssMsg.Payload = &gossipv1.PropagatedMessage_Unicast{
 			Unicast: msgToSend,
 		}
