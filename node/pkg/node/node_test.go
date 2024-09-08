@@ -85,7 +85,7 @@ type mockGuardian struct {
 	ready            bool
 	config           *guardianConfig
 	db               *db.Database
-	tssEngine        *tss.Engine
+	tssEngine        tss.ReliableTSS
 }
 
 type guardianConfig struct {
@@ -125,7 +125,7 @@ func newMockGuardianSet(t testing.TB, testId uint, n int) []*mockGuardian {
 			panic(err)
 		}
 
-		tssStorage, err := tss.GuardianStorageFromFile(tssStoragePath)
+		tssStorage, err := tss.NewGuardianStorageFromFile(tssStoragePath)
 		if err != nil {
 			panic(err)
 		}
@@ -336,7 +336,7 @@ func waitForPromMetricGte(t testing.TB, ctx context.Context, gs []*mockGuardian,
 	}
 }
 
-// waitForVaa polls the publicRpc service every 5ms until there is a response.
+// waitForVaa polls the publicRpc service every 10ms until there is a response.
 func waitForVaa(t testing.TB, ctx context.Context, c publicrpcv1.PublicRPCServiceClient, msgId *publicrpcv1.MessageID, mustNotReachQuorum bool) (*publicrpcv1.GetSignedVAAResponse, error) {
 	t.Helper()
 	var r *publicrpcv1.GetSignedVAAResponse
@@ -821,7 +821,7 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int) {
 				EmitterChain:   publicrpcv1.ChainID(msg.EmitterChain),
 				EmitterAddress: msg.EmitterAddress.String(),
 				Sequence:       msg.Sequence,
-				Version:        uint32(vaa.SupportedVAAVersion),
+				Version:        uint32(vaa.VaaVersion1),
 			}
 			if testCase.shouldExpectTssSignature {
 				msgId.Version = uint32(vaa.TSSVaaVersion)
@@ -993,7 +993,7 @@ func runGuardianConfigTests(t *testing.T, testCases []testCaseGuardianConfig) {
 				ctx, ctxCancel := context.WithCancel(ctx)
 				defer ctxCancel()
 
-				guardianTssStorage, err := tss.GuardianStorageFromFile(testutils.MustGetMockGuardianTssStorage())
+				guardianTssStorage, err := tss.NewGuardianStorageFromFile(testutils.MustGetMockGuardianTssStorage())
 				require.NoError(t, err)
 
 				reliableTss, err := tss.NewReliableTSS(guardianTssStorage)

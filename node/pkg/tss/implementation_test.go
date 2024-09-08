@@ -39,7 +39,7 @@ func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
 		panic(err)
 	}
 
-	st, err := GuardianStorageFromFile(path)
+	st, err := NewGuardianStorageFromFile(path)
 	if err != nil {
 		panic(err)
 	}
@@ -287,7 +287,7 @@ func TestE2E(t *testing.T) {
 	}
 
 	fmt.Println("msgHandler settup:")
-	dnchn := msgHandler(a, ctx, engines)
+	dnchn := msgHandler(ctx, engines)
 
 	fmt.Println("engines started, requesting sigs")
 	// all engines are started, now we can begin the protocol.
@@ -418,13 +418,13 @@ func loadGuardians(a *assert.Assertions) []*Engine {
 	for i := 0; i < Participants; i++ {
 		e, err := NewReliableTSS(loadMockGuardianStorage(i))
 		a.NoError(err)
-		engines[i] = e
+		engines[i] = e.(*Engine)
 	}
 
 	return engines
 }
 
-func msgHandler(a *assert.Assertions, ctx context.Context, engines []*Engine) chan struct{} {
+func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 	signalSuccess := make(chan struct{})
 	once := sync.Once{}
 

@@ -39,7 +39,7 @@ type Engine struct {
 	messageOutChan chan *gossipv1.GossipMessage
 	fpErrChannel   chan *tss.Error // used to log issues from the FullParty.
 
-	started         bool
+	started         atomic.Uint32
 	msgSerialNumber uint64
 
 	// used to perform reliable broadcast:
@@ -83,7 +83,7 @@ func (g *GuardianStorage) contains(pid *tss.PartyID) bool {
 
 // GuardianStorageFromFile loads a guardian storage from a file.
 // If the storage file hadn't contained symetric keys, it'll compute them.
-func GuardianStorageFromFile(storagePath string) (*GuardianStorage, error) {
+func NewGuardianStorageFromFile(storagePath string) (*GuardianStorage, error) {
 	var storage GuardianStorage
 	if err := storage.load(storagePath); err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	if t == nil {
 		return fmt.Errorf("tss engine is nil")
 	}
-	if !t.started {
+	if t.started.Load() != started {
 		return fmt.Errorf("tss engine hasn't started")
 	}
 
@@ -115,7 +115,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		return fmt.Errorf("tss engine is not set up correctly, use NewReliableTSS to create a new engine")
 	}
 
-	if len(vaaDigest) != 32 {
+	if len(vaaDigest) != digestSize {
 		return fmt.Errorf("vaaDigest length is not 32 bytes")
 	}
 
@@ -126,7 +126,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	return t.fp.AsyncRequestNewSignature(d)
 }
 
-func NewReliableTSS(storage *GuardianStorage) (*Engine, error) {
+func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 	if storage == nil {
 		return nil, fmt.Errorf("the guardian's tss storage is nil")
 	}
@@ -156,15 +156,17 @@ func NewReliableTSS(storage *GuardianStorage) (*Engine, error) {
 
 		logger:          zap.Logger{},
 		GuardianStorage: *storage,
+
 		fp:              fp,
 		fpOutChan:       fpOutChan,
 		fpSigOutChan:    fpSigOutChan,
 		fpErrChannel:    fpErrChannel,
 		messageOutChan:  make(chan *gossipv1.GossipMessage),
-		started:         false,
 		msgSerialNumber: 0,
 		mtx:             &sync.Mutex{},
 		received:        map[digest]*broadcaststate{},
+
+		started: atomic.Uint32{}, // default value is 0
 	}
 
 	return t, nil
@@ -172,16 +174,23 @@ func NewReliableTSS(storage *GuardianStorage) (*Engine, error) {
 
 // Start starts the TSS engine, and listens for the outputs of the full party.
 func (t *Engine) Start(ctx context.Context) error {
+	if t == nil {
+		return fmt.Errorf("tss engine is nil")
+	}
+
+	if !t.started.CompareAndSwap(notStarted, started) {
+		return fmt.Errorf("tss engine has already started")
+	}
+
 	t.ctx = ctx
 
 	if err := t.fp.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
+		t.started.Store(notStarted)
 		return err
 	}
 	//closing the t.fp.start inside th listener
 
 	go t.fpListener()
-
-	t.started = true
 
 	return nil
 }
@@ -208,7 +217,7 @@ func (t *Engine) fpListener() {
 		case m := <-t.fpOutChan:
 			tssMsg, err := t.intoGossipMessage(m)
 			if err != nil {
-				continue
+				continue // TODO: log the error.
 			}
 
 			// todo: ensure someone listens to this channel.
