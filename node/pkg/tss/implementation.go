@@ -33,8 +33,6 @@ type Engine struct {
 
 	fp party.FullParty
 
-	// TODO We must ensure someone ALWAYS listens on these channels, and does nothing else.
-	// Otherwise, we might have a circular dependancy blocking the engine/FullParty from working.
 	fpOutChan      chan tss.Message
 	fpSigOutChan   chan *common.SignatureData
 	messageOutChan chan *gossipv1.GossipMessage
@@ -232,7 +230,7 @@ func (t *Engine) fpListener() {
 
 			t.messageOutChan <- tssMsg
 		case err := <-t.fpErrChannel:
-			// TODO: Do we need to add to the error the Digest that this error is related to?
+			// TODO: Ensure that fullParty errors contain trackingId.
 			t.logger.Error("Error while generating TSS signature", zap.Error(err))
 		}
 	}
@@ -300,13 +298,14 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 	switch m := msg.TssMessage.Payload.(type) {
 	case *gossipv1.PropagatedMessage_Unicast:
 		if err := t.handleUnicast(m); err != nil {
-			// TODO: log?
+			t.logger.Error("issue while handling unicast", zap.Error(err))
 			return
 		}
 	case *gossipv1.PropagatedMessage_Echo:
 		shouldEcho, err := t.handleEcho(m)
 		if err != nil {
-			// TODO: log?
+			t.logger.Error("issue while handling echo", zap.Error(err))
+			return
 		}
 
 		if !shouldEcho {
@@ -314,7 +313,8 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 		}
 
 		if err := t.sendEchoOut(m); err != nil {
-			return // TODO log.
+			t.logger.Error("couldn't echo message", zap.Error(err))
+			return
 		}
 	}
 }
