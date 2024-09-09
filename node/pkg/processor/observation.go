@@ -316,9 +316,18 @@ func (p *Processor) handleInboundSignedVAAWithQuorum(m *gossipv1.SignedVAAWithQu
 		return
 	}
 
-	if err := v.Verify(p.gs.Keys); err != nil {
+	addresses := p.gs.Keys
+	if v.Version == vaa.TSSVaaVersion {
+		addresses = []common.Address{p.thresholdSigner.GetEthAddress()}
+	}
+
+	if err := v.Verify(addresses); err != nil {
 		// We format the error as part of the message so the tests can check for it.
-		p.logger.Warn("dropping SignedVAAWithQuorum message because it failed verification: "+err.Error(), zap.String("message_id", v.MessageID()))
+		p.logger.Warn(
+			"dropping SignedVAAWithQuorum message because it failed verification: "+err.Error(),
+			zap.String("message_id", v.MessageID()),
+			zap.Uint8("version", v.Version),
+		)
 		return
 	}
 
