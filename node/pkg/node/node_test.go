@@ -386,6 +386,7 @@ type testCase struct {
 
 	// if true, the guardian will wait for a signature output from the TssEngine.
 	shouldExpectTssSignature bool
+	queryAllGuardiansForVAAs bool
 }
 
 func randomTime() time.Time {
@@ -665,7 +666,6 @@ func TestConsensus(t *testing.T) {
 // informOnNewVAAs means whether guardians are subscribing to p2p channels informing on new VAAs.
 func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, informOnNewVAAs bool) {
 	const testTimeout = time.Second * 60
-	const vaaCheckGuardianIndex uint = 0 // we will query this guardian's publicrpc for VAAs
 	const adminRpcGuardianIndex uint = 0 // we will query this guardian's adminRpc
 	testId := getTestId()
 
@@ -795,19 +795,24 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, inf
 			}
 		}()
 
-		// Wait for publicrpc to come online
-		for zapObserver.FilterMessage("publicrpc server listening").FilterField(zap.String("addr", gs[vaaCheckGuardianIndex].config.publicRpc)).Len() == 0 {
-			logger.Info("publicrpc seems to be offline (according to logs). Waiting 100ms...")
-			time.Sleep(time.Microsecond * 100)
+		for i := range gs {
+			// Wait for publicrpc to come online
+			for zapObserver.FilterMessage("publicrpc server listening").FilterField(zap.String("addr", gs[i].config.publicRpc)).Len() == 0 {
+				logger.Info("publicrpc seems to be offline (according to logs). Waiting 100ms...")
+				time.Sleep(time.Microsecond * 100)
+			}
 		}
 
-		// check that the VAAs were generated
+		cs := make([]publicrpcv1.PublicRPCServiceClient, numGuardians)
 		logger.Info("Connecting to publicrpc...")
-		conn, err := grpc.DialContext(ctx, gs[vaaCheckGuardianIndex].config.publicRpc, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		require.NoError(t, err)
 
-		defer conn.Close()
-		c := publicrpcv1.NewPublicRPCServiceClient(conn)
+		for i := 0; i < numGuardians; i++ {
+			conn, err := grpc.DialContext(ctx, gs[i].config.publicRpc, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			require.NoError(t, err)
+			defer conn.Close()
+
+			cs[i] = publicrpcv1.NewPublicRPCServiceClient(conn)
+		}
 
 		gsAddrList := mockGuardianSetToGuardianAddrList(t, gs)
 
@@ -817,51 +822,15 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, inf
 
 			logger.Info("Checking result of testcase", zap.Int("test_case", i))
 
-			// poll the API until we get a response without error
-			msgId := &publicrpcv1.MessageID{
-				EmitterChain:   publicrpcv1.ChainID(msg.EmitterChain),
-				EmitterAddress: msg.EmitterAddress.String(),
-				Sequence:       msg.Sequence,
-				Version:        uint32(vaa.VaaVersion1),
+			numGuardiansToCheck := 1
+			if testCase.queryAllGuardiansForVAAs {
+				numGuardiansToCheck = len(gs)
 			}
-			if testCase.shouldExpectTssSignature {
-				msgId.Version = uint32(vaa.TSSVaaVersion)
+
+			for i := 0; i < numGuardiansToCheck; i++ {
+				pollApiAndInspectVaa(t, ctx, msg, testCase, cs[i], gsAddrList, gs)
 			}
-			r, err := waitForVaa(t, ctx, c, msgId, testCase.mustNotReachQuorum)
-			assert.NotEqual(t, testCase.mustNotReachQuorum, testCase.mustReachQuorum) // either or
-			if testCase.mustNotReachQuorum {
-				assert.EqualError(t, err, "rpc error: code = NotFound desc = requested VAA not found in store")
-			} else if testCase.mustReachQuorum {
-				require.NoError(t, err)
-				require.NotNil(t, r)
-				returnedVaa, err := vaa.Unmarshal(r.VaaBytes)
-				assert.NoError(t, err)
 
-				// Check signatures
-				if !testCase.prePopulateVAA { // if the VAA is pre-populated with a dummy, then this is expected to fail
-					addrLst := gsAddrList
-					if testCase.shouldExpectTssSignature {
-						addrLst = []eth_common.Address{gs[0].tssEngine.GetEthAddress()}
-					}
-
-					assert.NoError(t, returnedVaa.Verify(addrLst))
-				}
-
-				// Match all the fields
-				if testCase.shouldExpectTssSignature {
-					assert.Equal(t, returnedVaa.Version, uint8(vaa.TSSVaaVersion))
-				} else {
-					assert.Equal(t, returnedVaa.Version, uint8(1))
-				}
-				assert.Equal(t, returnedVaa.GuardianSetIndex, uint32(guardianSetIndex))
-				assert.Equal(t, returnedVaa.Timestamp, msg.Timestamp)
-				assert.Equal(t, returnedVaa.Nonce, msg.Nonce)
-				assert.Equal(t, returnedVaa.Sequence, msg.Sequence)
-				assert.Equal(t, returnedVaa.ConsistencyLevel, msg.ConsistencyLevel)
-				assert.Equal(t, returnedVaa.EmitterChain, msg.EmitterChain)
-				assert.Equal(t, returnedVaa.EmitterAddress, msg.EmitterAddress)
-				assert.Equal(t, returnedVaa.Payload, msg.Payload)
-			}
 		}
 
 		// We're done!
@@ -882,6 +851,54 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, inf
 	// tests are happy.
 	zapLogger.Info("Test root context cancelled, waiting for everything to shut down properly...")
 	time.Sleep(time.Millisecond * 50)
+}
+
+func pollApiAndInspectVaa(t *testing.T, ctx context.Context, msg *common.MessagePublication, testCase testCase, c publicrpcv1.PublicRPCServiceClient, gsAddrList []eth_common.Address, gs []*mockGuardian) {
+	msgId := &publicrpcv1.MessageID{
+		EmitterChain:   publicrpcv1.ChainID(msg.EmitterChain),
+		EmitterAddress: msg.EmitterAddress.String(),
+		Sequence:       msg.Sequence,
+		Version:        uint32(vaa.VaaVersion1),
+	}
+	if testCase.shouldExpectTssSignature {
+		msgId.Version = uint32(vaa.TSSVaaVersion)
+	}
+
+	r, err := waitForVaa(t, ctx, c, msgId, testCase.mustNotReachQuorum)
+	assert.NotEqual(t, testCase.mustNotReachQuorum, testCase.mustReachQuorum) // either or
+	if testCase.mustNotReachQuorum {
+		assert.EqualError(t, err, "rpc error: code = NotFound desc = requested VAA not found in store")
+	} else if testCase.mustReachQuorum {
+		require.NoError(t, err)
+		require.NotNil(t, r)
+		returnedVaa, err := vaa.Unmarshal(r.VaaBytes)
+		assert.NoError(t, err)
+
+		// Check signatures
+		if !testCase.prePopulateVAA { // if the VAA is pre-populated with a dummy, then this is expected to fail
+			addrLst := gsAddrList
+			if testCase.shouldExpectTssSignature {
+				addrLst = []eth_common.Address{gs[0].tssEngine.GetEthAddress()}
+			}
+
+			assert.NoError(t, returnedVaa.Verify(addrLst))
+		}
+
+		// Match all the fields
+		if testCase.shouldExpectTssSignature {
+			assert.Equal(t, returnedVaa.Version, uint8(vaa.TSSVaaVersion))
+		} else {
+			assert.Equal(t, returnedVaa.Version, uint8(1))
+		}
+		assert.Equal(t, returnedVaa.GuardianSetIndex, uint32(guardianSetIndex))
+		assert.Equal(t, returnedVaa.Timestamp, msg.Timestamp)
+		assert.Equal(t, returnedVaa.Nonce, msg.Nonce)
+		assert.Equal(t, returnedVaa.Sequence, msg.Sequence)
+		assert.Equal(t, returnedVaa.ConsistencyLevel, msg.ConsistencyLevel)
+		assert.Equal(t, returnedVaa.EmitterChain, msg.EmitterChain)
+		assert.Equal(t, returnedVaa.EmitterAddress, msg.EmitterAddress)
+		assert.Equal(t, returnedVaa.Payload, msg.Payload)
+	}
 }
 
 type testCaseGuardianConfig struct {
@@ -1349,6 +1366,7 @@ func TestTssCorrectRun(t *testing.T) {
 			numGuardiansObserve:      guardians,
 			mustReachQuorum:          true,
 			shouldExpectTssSignature: true,
+			queryAllGuardiansForVAAs: true,
 		},
 	}
 
