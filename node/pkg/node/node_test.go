@@ -159,7 +159,7 @@ func mockGuardianSetToGuardianAddrList(t testing.TB, gs []*mockGuardian) []eth_c
 }
 
 // mockGuardianRunnable returns a runnable that first sets up a mock guardian an then runs it.
-func mockGuardianRunnable(t testing.TB, gs []*mockGuardian, mockGuardianIndex uint, obsDb mock.ObservationDb) supervisor.Runnable {
+func mockGuardianRunnable(t testing.TB, gs []*mockGuardian, mockGuardianIndex uint, obsDb mock.ObservationDb, informOnNewVAAs bool) supervisor.Runnable {
 	t.Helper()
 	return func(ctx context.Context) error {
 		// Create a sub-context with cancel function that we can pass to G.run.
@@ -209,7 +209,7 @@ func mockGuardianRunnable(t testing.TB, gs []*mockGuardian, mockGuardianIndex ui
 			GuardianOptionNoAccountant(), // disable accountant
 			GuardianOptionGovernor(true, false),
 			GuardianOptionGatewayRelayer("", nil), // disable gateway relayer
-			GuardianOptionP2P(gs[mockGuardianIndex].p2pKey, networkID, bootstrapPeers, nodeName, false, false, cfg.p2pPort, "", 0, "", "", func() string { return "" }),
+			GuardianOptionP2P(gs[mockGuardianIndex].p2pKey, networkID, bootstrapPeers, nodeName, informOnNewVAAs, false, cfg.p2pPort, "", 0, "", "", func() string { return "" }),
 			GuardianOptionPublicRpcSocket(cfg.publicSocket, publicRpcLogDetail),
 			GuardianOptionPublicrpcTcpService(cfg.publicRpc, publicRpcLogDetail),
 			GuardianOptionPublicWeb(cfg.publicWeb, cfg.publicSocket, "", false, ""),
@@ -658,11 +658,12 @@ func TestConsensus(t *testing.T) {
 		// TODO add a testcase to test the automatic re-observation requests.
 		// Need to refactor various usage of wall time to a mockable time first. E.g. using https://github.com/benbjohnson/clock
 	}
-	runConsensusTests(t, testCases, numGuardians)
+	runConsensusTests(t, testCases, numGuardians, false)
 }
 
 // runConsensusTests spins up `numGuardians` guardians and runs & verifies the testCases
-func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int) {
+// informOnNewVAAs means whether guardians are subscribing to p2p channels informing on new VAAs.
+func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, informOnNewVAAs bool) {
 	const testTimeout = time.Second * 60
 	const vaaCheckGuardianIndex uint = 0 // we will query this guardian's publicrpc for VAAs
 	const adminRpcGuardianIndex uint = 0 // we will query this guardian's adminRpc
@@ -682,7 +683,7 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int) {
 
 		// run the guardians
 		for i := 0; i < numGuardians; i++ {
-			gRun := mockGuardianRunnable(t, gs, uint(i), obsDb)
+			gRun := mockGuardianRunnable(t, gs, uint(i), obsDb, informOnNewVAAs)
 			err := supervisor.Run(ctx, fmt.Sprintf("g-%d", i), gRun)
 			if i == 0 && numGuardians > 1 {
 				time.Sleep(time.Second) // give the bootstrap guardian some time to start up
@@ -827,11 +828,11 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int) {
 				msgId.Version = uint32(vaa.TSSVaaVersion)
 			}
 			r, err := waitForVaa(t, ctx, c, msgId, testCase.mustNotReachQuorum)
-
 			assert.NotEqual(t, testCase.mustNotReachQuorum, testCase.mustReachQuorum) // either or
 			if testCase.mustNotReachQuorum {
 				assert.EqualError(t, err, "rpc error: code = NotFound desc = requested VAA not found in store")
 			} else if testCase.mustReachQuorum {
+				require.NoError(t, err)
 				require.NotNil(t, r)
 				returnedVaa, err := vaa.Unmarshal(r.VaaBytes)
 				assert.NoError(t, err)
@@ -1224,7 +1225,7 @@ func runConsensusBenchmark(t *testing.B, name string, numGuardians int, numMessa
 
 			// run the guardians
 			for i := 0; i < numGuardians; i++ {
-				gRun := mockGuardianRunnable(t, gs, uint(i), obsDb)
+				gRun := mockGuardianRunnable(t, gs, uint(i), obsDb, false)
 				err := supervisor.Run(ctx, fmt.Sprintf("g-%d", i), gRun)
 				if i == 0 && numGuardians > 1 {
 					time.Sleep(time.Second) // give the bootstrap guardian some time to start up
@@ -1351,7 +1352,7 @@ func TestTssCorrectRun(t *testing.T) {
 		},
 	}
 
-	runConsensusTests(t, testCases, guardians)
+	runConsensusTests(t, testCases, guardians, true)
 }
 
 func TestTssSignatureFailure(t *testing.T) {

@@ -286,7 +286,7 @@ func (p *Processor) handleInboundSignedVAAWithQuorum(m *gossipv1.SignedVAAWithQu
 			zap.Error(err), zap.Any("message", m))
 		return
 	}
-	fmt.Println("received sign VAA (JOHN)")
+
 	// Check if we already store this VAA
 	if p.haveSignedVAA(*db.VaaIDFromVAA(v)) {
 		if p.logger.Level().Enabled(zapcore.DebugLevel) {
