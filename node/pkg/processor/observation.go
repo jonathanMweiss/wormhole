@@ -286,7 +286,7 @@ func (p *Processor) handleInboundSignedVAAWithQuorum(m *gossipv1.SignedVAAWithQu
 			zap.Error(err), zap.Any("message", m))
 		return
 	}
-
+	fmt.Println("received sign VAA (JOHN)")
 	// Check if we already store this VAA
 	if p.haveSignedVAA(*db.VaaIDFromVAA(v)) {
 		if p.logger.Level().Enabled(zapcore.DebugLevel) {
@@ -306,19 +306,19 @@ func (p *Processor) handleInboundSignedVAAWithQuorum(m *gossipv1.SignedVAAWithQu
 		return
 	}
 
+	addresses := p.gs.Keys
+	if v.Version == vaa.TSSVaaVersion {
+		addresses = []common.Address{p.thresholdSigner.GetEthAddress()}
+	}
+
 	// Check if guardianSet doesn't have any keys
-	if len(p.gs.Keys) == 0 {
+	if len(addresses) == 0 {
 		p.logger.Warn("dropping SignedVAAWithQuorum message since we have a guardian set without keys",
 			zap.String("message_id", v.MessageID()),
 			zap.String("digest", hex.EncodeToString(v.SigningDigest().Bytes())),
 			zap.Any("message", m),
 		)
 		return
-	}
-
-	addresses := p.gs.Keys
-	if v.Version == vaa.TSSVaaVersion {
-		addresses = []common.Address{p.thresholdSigner.GetEthAddress()}
 	}
 
 	if err := v.Verify(addresses); err != nil {
