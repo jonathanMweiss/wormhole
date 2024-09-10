@@ -30,7 +30,8 @@ type Engine struct {
 	logger *zap.Logger
 	GuardianStorage
 
-	fp party.FullParty
+	fpParams *party.Parameters
+	fp       party.FullParty
 
 	fpOutChan      chan tss.Message
 	fpSigOutChan   chan *common.SignatureData
@@ -130,7 +131,7 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 	}
 	// fmt.Println("guardian storage loaded, threshold is:	", storage.Threshold)
 
-	fpParams := party.Parameters{
+	fpParams := &party.Parameters{
 		SavedSecrets:         storage.SavedSecretParameters,
 		PartyIDs:             storage.Guardians,
 		Self:                 storage.Self,
@@ -140,7 +141,7 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		LoadDistributionSeed: storage.LoadDistributionKey,
 	}
 
-	fp, err := party.NewFullParty(&fpParams)
+	fp, err := party.NewFullParty(fpParams)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +156,7 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		logger:          &zap.Logger{},
 		GuardianStorage: *storage,
 
+		fpParams:        fpParams,
 		fp:              fp,
 		fpOutChan:       fpOutChan,
 		fpSigOutChan:    fpSigOutChan,
@@ -211,11 +213,15 @@ func (t *Engine) GetEthAddress() ethcommon.Address {
 // fpListener serves as a listining loop for the full party outputs.
 // ensures the FP isn't being blocked on writing to fpOutChan, and wraps the result into a gossip message.
 func (t *Engine) fpListener() {
+	// using a few more seconds to ensure
+	cleanUpTicker := time.NewTicker(t.fpParams.MaxSignerTTL + time.Second*5)
 	for {
 		select {
 		case <-t.ctx.Done():
 			fmt.Printf("guardian %v stopped its full party\n", t.GuardianStorage.Self.Index)
 			t.fp.Stop()
+			cleanUpTicker.Stop()
+
 			return
 		case m := <-t.fpOutChan:
 			tssMsg, err := t.intoGossipMessage(m)
@@ -232,10 +238,24 @@ func (t *Engine) fpListener() {
 			_ = err
 			// TODO: Ensure that fullParty errors contain trackingId.
 			// t.logger.Error("Error while generating TSS signature", zap.Error(err))
+		case <-cleanUpTicker.C:
+			t.cleanup()
 		}
 	}
 }
 
+func (t *Engine) cleanup() {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+
+	for k, v := range t.received {
+		if time.Since(v.timeReceived) > time.Minute*5 {
+			// althoug delete doesn't reduce the size of the underlying map
+			// it is good enough since this map contains many entries, and it'll be wastefull to let a new map grow again.
+			delete(t.received, k)
+		}
+	}
+}
 func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, error) {
 	bts, routing, err := m.WireBytes()
 	if err != nil {
