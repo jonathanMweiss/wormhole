@@ -6,7 +6,61 @@ import (
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
+	"go.uber.org/zap"
 )
+
+type logableError struct {
+	cause      error
+	trackingId []byte
+	round      signingRound // TODO: consider, it might require following the state of the fullParty per message.
+}
+
+func (l logableError) Error() string {
+	if l.cause == nil {
+		return ""
+	}
+	return l.cause.Error()
+}
+
+// Unwrap ensures logableError supports errors.Is and errors.As methods.
+func (l logableError) Unwrap() error {
+	return l.cause
+}
+
+func logErr(l *zap.Logger, err error) {
+	if l == nil {
+		return
+	}
+
+	if err == nil {
+		return
+	}
+
+	informativeErr, ok := err.(logableError)
+	if !ok {
+		l.Error(err.Error())
+		return
+	}
+
+	switch {
+	case informativeErr.round != "", informativeErr.trackingId != nil:
+		l.Error(
+			informativeErr.Error(),
+			zap.String("round", string(informativeErr.round)),
+			zap.String("trackingId", fmt.Sprintf("%x", informativeErr.trackingId)),
+		)
+	case informativeErr.trackingId != nil:
+		l.Error(
+			informativeErr.Error(),
+			zap.String("trackingId", fmt.Sprintf("%x", informativeErr.trackingId)),
+		)
+	case informativeErr.round != "":
+		l.Error(
+			informativeErr.Error(),
+			zap.String("round", string(informativeErr.round)),
+		)
+	}
+}
 
 func equalPartyIds(a, b *tss.PartyID) bool {
 	return a.Id == b.Id && string(a.Key) == string(b.Key)
@@ -128,6 +182,15 @@ const (
 	round8Message  signingRound = "round8"
 	round9Message  signingRound = "round9"
 )
+
+var _intToRoundArr = []signingRound{"round1", round2Message, round3Message, round4Message, round5Message, round6Message, round7Message, round8Message, round9Message}
+
+func intToRound(i int) signingRound {
+	if i < 1 || i > 9 {
+		return ""
+	}
+	return _intToRoundArr[i-1]
+}
 
 func getRound(m tss.ParsedMessage) (signingRound, error) {
 	switch m.Content().(type) {

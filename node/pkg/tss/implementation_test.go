@@ -5,16 +5,20 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
+	"github.com/certusone/wormhole/node/pkg/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -76,12 +80,15 @@ func TestBroadcast(t *testing.T) {
 		e1 := engines[0]
 		// make parsedMessage, and insert into e1
 		// then add another one for the same round.
-		parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+			// parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
 
-		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, parsedIntoEcho(a, e1, parsed1))
-		a.NoError(err)
-		a.True(shouldBroadcast)
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, parsedIntoEcho(a, e1, parsed1))
+			a.NoError(err)
+			a.True(shouldBroadcast)
+			a.False(shouldDeliver)
+		}
 	})
 
 	t.Run("forEnoughEchos", func(t *testing.T) {
@@ -91,22 +98,24 @@ func TestBroadcast(t *testing.T) {
 
 		// two different signers on an echo, meaning it will receive from two players.
 		// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
-		parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
-		echo := parsedIntoEcho(a, e1, parsed1)
-		a.NoError(e2.signEcho(echo))
+			echo := parsedIntoEcho(a, e1, parsed1)
+			a.NoError(e2.signEcho(echo))
 
-		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.False(shouldBroadcast)
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.False(shouldBroadcast)
+			a.False(shouldDeliver)
 
-		a.NoError(e3.signEcho(echo))
+			a.NoError(e3.signEcho(echo))
 
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.True(shouldBroadcast)
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.True(shouldBroadcast)
+			a.False(shouldDeliver)
+		}
 	})
 }
 
@@ -118,29 +127,31 @@ func TestDeliver(t *testing.T) {
 
 		// two different signers on an echo, meaning it will receive from two players.
 		// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
-		parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
-		echo := parsedIntoEcho(a, e1, parsed1)
-		a.NoError(e2.signEcho(echo))
+			echo := parsedIntoEcho(a, e1, parsed1)
+			a.NoError(e2.signEcho(echo))
 
-		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.False(shouldBroadcast)
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.False(shouldBroadcast)
+			a.False(shouldDeliver)
 
-		a.NoError(e3.signEcho(echo))
+			a.NoError(e3.signEcho(echo))
 
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.True(shouldBroadcast)
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.True(shouldBroadcast)
+			a.False(shouldDeliver)
 
-		a.NoError(e1.signEcho(echo))
+			a.NoError(e1.signEcho(echo))
 
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.False(shouldBroadcast)
-		a.True(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.False(shouldBroadcast)
+			a.True(shouldDeliver)
+		}
 	})
 
 	t.Run("doesn'tDeliverTwice", func(t *testing.T) {
@@ -150,36 +161,37 @@ func TestDeliver(t *testing.T) {
 
 		// two different signers on an echo, meaning it will receive from two players.
 		// since f=1 and we have f+1 echos: it should broadcast at the end of this test.
-		parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+			echo := parsedIntoEcho(a, e1, parsed1)
+			a.NoError(e2.signEcho(echo))
 
-		echo := parsedIntoEcho(a, e1, parsed1)
-		a.NoError(e2.signEcho(echo))
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.False(shouldBroadcast)
+			a.False(shouldDeliver)
 
-		shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.False(shouldBroadcast)
-		a.False(shouldDeliver)
+			a.NoError(e3.signEcho(echo))
 
-		a.NoError(e3.signEcho(echo))
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.True(shouldBroadcast)
+			a.False(shouldDeliver)
 
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.True(shouldBroadcast)
-		a.False(shouldDeliver)
+			a.NoError(e1.signEcho(echo))
 
-		a.NoError(e1.signEcho(echo))
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.False(shouldBroadcast)
+			a.True(shouldDeliver)
 
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.False(shouldBroadcast)
-		a.True(shouldDeliver)
+			a.NoError(e4.signEcho(echo))
 
-		a.NoError(e4.signEcho(echo))
-
-		shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
-		a.NoError(err)
-		a.False(shouldBroadcast)
-		a.False(shouldDeliver)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
+			a.NoError(err)
+			a.False(shouldBroadcast)
+			a.False(shouldDeliver)
+		}
 	})
 }
 
@@ -279,7 +291,8 @@ func TestE2E(t *testing.T) {
 	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*60)
-	defer cancel() // ensures all engines will stop (avoid dangling goroutines).
+	defer cancel()
+	ctx = setSupervisor(ctx)
 
 	fmt.Println("starting engines.")
 	for _, engine := range engines {
@@ -301,6 +314,26 @@ func TestE2E(t *testing.T) {
 	case <-ctx.Done():
 		t.FailNow()
 	}
+}
+
+func setSupervisor(ctx context.Context) context.Context {
+	var supervisedCtx context.Context
+
+	logger := zap.New(
+		zapcore.NewCore(
+			zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+			zapcore.AddSync(zapcore.Lock(os.Stderr)),
+			zap.NewAtomicLevelAt(zapcore.Level(zapcore.DebugLevel)),
+		),
+	)
+
+	supervisor.New(ctx, logger, func(ctx context.Context) error {
+		supervisedCtx = ctx
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	return supervisedCtx
 }
 
 func TestMessagesWithBadRounds(t *testing.T) {
