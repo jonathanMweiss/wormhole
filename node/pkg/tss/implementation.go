@@ -238,20 +238,26 @@ func (t *Engine) fpListener() {
 
 		case m := <-t.fpOutChan:
 			tssMsg, err := t.intoGossipMessage(m)
-			if err != nil {
-				var rnd signingRound
-				if parsed, ok := m.(tss.ParsedMessage); ok {
-					rnd, _ = getRound(parsed) // we don't care about the error here
-				}
-
-				logErr(t.logger, logableError{
-					fmt.Errorf("failed to convert tss message and send it to network: %w", err),
-					m.WireMsg().GetTrackingID(),
-					rnd,
-				})
+			if err == nil {
+				t.messageOutChan <- tssMsg
 				continue
 			}
-			t.messageOutChan <- tssMsg
+			// else log error:
+			lgErr := logableError{
+				fmt.Errorf("failed to convert tss message and send it to network: %w", err),
+				m.WireMsg().GetTrackingID(),
+				"",
+			}
+
+			// The following should always pass, since FullParty outputs a
+			// tss.ParsedMessage and a valid message with a specific round.
+			if parsed, ok := m.(tss.ParsedMessage); ok {
+				if rnd, e := getRound(parsed); e == nil {
+					lgErr.round = rnd
+				}
+			}
+
+			logErr(t.logger, lgErr)
 
 		case err := <-t.fpErrChannel:
 			logErr(t.logger, &logableError{
