@@ -385,7 +385,7 @@ type testCase struct {
 	mustNotReachQuorum bool
 
 	// if true, the guardian will wait for a signature output from the TssEngine.
-	shouldExpectTssSignature bool
+	tssVaaVersionChecks      bool
 	queryAllGuardiansForVAAs bool
 }
 
@@ -860,7 +860,7 @@ func pollApiAndInspectVaa(t *testing.T, ctx context.Context, msg *common.Message
 		Sequence:       msg.Sequence,
 		Version:        uint32(vaa.VaaVersion1),
 	}
-	if testCase.shouldExpectTssSignature {
+	if testCase.tssVaaVersionChecks {
 		msgId.Version = uint32(vaa.TSSVaaVersion)
 	}
 
@@ -877,7 +877,7 @@ func pollApiAndInspectVaa(t *testing.T, ctx context.Context, msg *common.Message
 		// Check signatures
 		if !testCase.prePopulateVAA { // if the VAA is pre-populated with a dummy, then this is expected to fail
 			addrLst := gsAddrList
-			if testCase.shouldExpectTssSignature {
+			if testCase.tssVaaVersionChecks {
 				addrLst = []eth_common.Address{gs[0].tssEngine.GetEthAddress()}
 			}
 
@@ -885,7 +885,7 @@ func pollApiAndInspectVaa(t *testing.T, ctx context.Context, msg *common.Message
 		}
 
 		// Match all the fields
-		if testCase.shouldExpectTssSignature {
+		if testCase.tssVaaVersionChecks {
 			assert.Equal(t, returnedVaa.Version, uint8(vaa.TSSVaaVersion))
 		} else {
 			assert.Equal(t, returnedVaa.Version, uint8(1))
@@ -1358,15 +1358,41 @@ func runConsensusBenchmark(t *testing.B, name string, numGuardians int, numMessa
 }
 
 func TestTssCorrectRun(t *testing.T) {
-	guardians := 5
+	processor.FirstRetryMinWait = time.Second * 3
+	processor.CleanupInterval = time.Second * 30
+
+	const guardians = 5
 	testCases := []testCase{
 		{
-			// all guardians observe the message waiting for Tss signature.
+			// Best case scenario: all guardians observe the message and perform Tss Signing.
 			msg:                      someMessage(),
 			numGuardiansObserve:      guardians,
 			mustReachQuorum:          true,
-			shouldExpectTssSignature: true,
+			tssVaaVersionChecks:      true,
 			queryAllGuardiansForVAAs: true,
+		},
+		{
+			// Only one guardian observes the message, and performs Tss signing.
+			msg:                      someMessage(),
+			numGuardiansObserve:      1,
+			queryAllGuardiansForVAAs: true,
+			tssVaaVersionChecks:      true,
+			mustReachQuorum:          true,
+		},
+		{
+			// (TSSVersion of test): Message covered by Governor that should be delayed 24h and hence not reach quorum within this test
+			msg:                 governedMsg(true),
+			numGuardiansObserve: guardians,
+			mustNotReachQuorum:  true,
+			tssVaaVersionChecks: true,
+		},
+		{
+			// (TSSVersion of test): No Guardian makes the observation while watching
+			msg:                               someMessage(),
+			numGuardiansObserve:               0,
+			mustReachQuorum:                   true,
+			performManualReobservationRequest: true,
+			tssVaaVersionChecks:               true,
 		},
 	}
 
