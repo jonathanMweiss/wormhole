@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,6 +21,7 @@ import (
 	"github.com/certusone/wormhole/node/pkg/query"
 	"github.com/certusone/wormhole/node/pkg/readiness"
 	"github.com/certusone/wormhole/node/pkg/supervisor"
+	tsscomm "github.com/certusone/wormhole/node/pkg/tss/comm"
 	"github.com/certusone/wormhole/node/pkg/watchers"
 	"github.com/certusone/wormhole/node/pkg/watchers/ibc"
 	"github.com/certusone/wormhole/node/pkg/watchers/interfaces"
@@ -600,6 +603,32 @@ func GuardianOptionProcessor() *GuardianOption {
 				g.gatewayRelayer,
 				g.tssEngine,
 			).Run
+
+			return nil
+		}}
+}
+
+// TODO: add sopme struct to contain own certificate and private key, in addition to that map of host to certificates.?
+
+func GuardianOptionDirectNetworks(
+	socketPath string,
+	selfCredentials tls.Certificate,
+	CA x509.Certificate, // the certificate of the CA
+	// a list of hostnames.
+	peers []string,
+) *GuardianOption {
+	return &GuardianOption{
+		name:         "tsscomm",
+		dependencies: []string{"processor"}, // TODO: I think it is dependant on it, since the TSS passes its signatures to the processor.
+		f: func(_ context.Context, logger *zap.Logger, g *G) error {
+			g.runnables["tsscomm"] = tsscomm.NewServer(&tsscomm.Parameters{
+				SocketPath:      socketPath,
+				SelfCredentials: selfCredentials,
+				CA:              CA,
+				Peers:           peers,
+				Logger:          logger,
+				TssEngine:       g.tssEngine,
+			}).Run
 
 			return nil
 		}}

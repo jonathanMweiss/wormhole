@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
-	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
@@ -50,12 +50,12 @@ func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
 	return st
 }
 
-func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *gossipv1.Echo {
+func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *tsscommv1.Echo {
 	payload, _, err := parsed.WireBytes()
 	a.NoError(err)
 
-	echo1 := &gossipv1.Echo{
-		Message: &gossipv1.SignedMessage{
+	echo1 := &tsscommv1.Echo{
+		Message: &tsscommv1.SignedMessage{
 			Payload:         payload,
 			Sender:          partyIdToProto(t.Self),
 			Recipients:      nil,
@@ -63,7 +63,7 @@ func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *
 			Authentication:  nil,
 		},
 		Signature: []byte{},
-		Echoer:    &gossipv1.PartyId{},
+		Echoer:    &tsscommv1.PartyId{},
 	}
 
 	a.NoError(t.signEcho(echo1))
@@ -255,13 +255,13 @@ func TestEquivocation(t *testing.T) {
 
 			bts, _, err := parsed1.WireBytes()
 			a.NoError(err)
-			msg := &gossipv1.PropagatedMessage_Unicast{
-				Unicast: &gossipv1.SignedMessage{
+			msg := &tsscommv1.PropagatedMessage_Unicast{
+				Unicast: &tsscommv1.SignedMessage{
 					Payload:         bts,
 					Sender:          partyIdToProto(e1.Self),
-					Recipients:      []*gossipv1.PartyId{partyIdToProto(e2.Self)},
+					Recipients:      []*tsscommv1.PartyId{partyIdToProto(e2.Self)},
 					MsgSerialNumber: 0,
-					Authentication: &gossipv1.SignedMessage_MAC{
+					Authentication: &tsscommv1.SignedMessage_MAC{
 						MAC: []byte{1, 2, 3},
 					},
 				},
@@ -350,13 +350,13 @@ func TestMessagesWithBadRounds(t *testing.T) {
 			bts, _, err := parsed.WireBytes()
 			a.NoError(err)
 
-			m := &gossipv1.PropagatedMessage_Unicast{
-				Unicast: &gossipv1.SignedMessage{
+			m := &tsscommv1.PropagatedMessage_Unicast{
+				Unicast: &tsscommv1.SignedMessage{
 					Payload:         bts,
 					Sender:          partyIdToProto(from),
-					Recipients:      []*gossipv1.PartyId{partyIdToProto(to)},
+					Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
 					MsgSerialNumber: 0,
-					Authentication: &gossipv1.SignedMessage_MAC{
+					Authentication: &tsscommv1.SignedMessage_MAC{
 						MAC: []byte{1, 2, 3},
 					},
 				},
@@ -373,14 +373,14 @@ func TestMessagesWithBadRounds(t *testing.T) {
 			bts, _, err := parsed.WireBytes()
 			a.NoError(err)
 
-			m := &gossipv1.PropagatedMessage_Echo{
-				Echo: &gossipv1.Echo{
-					Message: &gossipv1.SignedMessage{
+			m := &tsscommv1.PropagatedMessage_Echo{
+				Echo: &tsscommv1.Echo{
+					Message: &tsscommv1.SignedMessage{
 						Payload:         bts,
 						Sender:          partyIdToProto(from),
-						Recipients:      []*gossipv1.PartyId{partyIdToProto(to)},
+						Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
 						MsgSerialNumber: 0,
-						Authentication: &gossipv1.SignedMessage_Signature{
+						Authentication: &tsscommv1.SignedMessage_Signature{
 							Signature: []byte{1, 2, 3},
 						},
 					},
@@ -465,9 +465,9 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 		wg := sync.WaitGroup{}
 		wg.Add(len(engines) * 2)
 
-		chns := make([]chan *gossipv1.GossipMessage_TssMessage, len(engines))
+		chns := make([]chan *tsscommv1.PropagatedMessage, len(engines))
 		for i := range chns {
-			chns[i] = make(chan *gossipv1.GossipMessage_TssMessage, 10000)
+			chns[i] = make(chan *tsscommv1.PropagatedMessage, 10000)
 		}
 
 		for i, e := range engines {
@@ -500,7 +500,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						return
 					case m := <-engine.ProducedOutputMessages():
 						for _, feedChn := range chns { // treating everything as broadcast for ease of use.
-							feedChn <- m.Message.(*gossipv1.GossipMessage_TssMessage)
+							feedChn <- m
 						}
 					case <-engine.ProducedSignature():
 						once.Do(func() { close(signalSuccess) })

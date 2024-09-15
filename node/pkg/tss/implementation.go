@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/supervisor"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -36,7 +36,7 @@ type Engine struct {
 
 	fpOutChan      chan tss.Message
 	fpSigOutChan   chan *common.SignatureData
-	messageOutChan chan *gossipv1.GossipMessage
+	messageOutChan chan *tsscommv1.PropagatedMessage
 	fpErrChannel   chan *tss.Error // used to log issues from the FullParty.
 
 	started         atomic.Uint32
@@ -98,7 +98,7 @@ func (t *Engine) ProducedSignature() <-chan *common.SignatureData {
 }
 
 // ProducedOutputMessages ensures a listener can send the output messages to the network.
-func (t *Engine) ProducedOutputMessages() <-chan *gossipv1.GossipMessage {
+func (t *Engine) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
 	return t.messageOutChan
 }
 
@@ -167,7 +167,7 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		fpOutChan:       fpOutChan,
 		fpSigOutChan:    fpSigOutChan,
 		fpErrChannel:    fpErrChannel,
-		messageOutChan:  make(chan *gossipv1.GossipMessage),
+		messageOutChan:  make(chan *tsscommv1.PropagatedMessage),
 		msgSerialNumber: 0,
 		mtx:             &sync.Mutex{},
 		received:        map[digest]*broadcaststate{},
@@ -284,18 +284,18 @@ func (t *Engine) cleanup() {
 		}
 	}
 }
-func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, error) {
+func (t *Engine) intoGossipMessage(m tss.Message) (*tsscommv1.PropagatedMessage, error) {
 	bts, routing, err := m.WireBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	indices := make([]*gossipv1.PartyId, 0, len(routing.To))
+	indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
 	for _, pId := range routing.To {
 		indices = append(indices, partyIdToProto(pId))
 	}
 
-	msgToSend := &gossipv1.SignedMessage{
+	msgToSend := &tsscommv1.SignedMessage{
 		Payload:         bts,
 		Sender:          partyIdToProto(m.GetFrom()),
 		Recipients:      indices,
@@ -303,12 +303,12 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 		Authentication:  nil,
 	}
 
-	tssMsg := &gossipv1.PropagatedMessage{} // TODO: Once we use dedicated connections, we can remove this wrapper message.
+	tssMsg := &tsscommv1.PropagatedMessage{} // TODO: Once we use dedicated connections, we can remove this wrapper message.
 
 	if routing.IsBroadcast || len(routing.To) == 0 || len(routing.To) > 1 {
 		t.sign(msgToSend)
-		echo := &gossipv1.PropagatedMessage_Echo{
-			Echo: &gossipv1.Echo{
+		echo := &tsscommv1.PropagatedMessage_Echo{
+			Echo: &tsscommv1.Echo{
 				Message: msgToSend,
 				// TODO: Once we use two-way-TLS, we can remove this field
 				// (just ensure we receive the message from the correct grpc stream).
@@ -326,31 +326,27 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*gossipv1.GossipMessage, erro
 	} else {
 		// TODO: remove this since we plan on using two-way-TLS connections.
 		t.encryptAndMac(msgToSend)
-		tssMsg.Payload = &gossipv1.PropagatedMessage_Unicast{
+		tssMsg.Payload = &tsscommv1.PropagatedMessage_Unicast{
 			Unicast: msgToSend,
 		}
 	}
 
-	return &gossipv1.GossipMessage{
-		Message: &gossipv1.GossipMessage_TssMessage{
-			TssMessage: tssMsg,
-		},
-	}, nil
+	return tssMsg, nil
 }
 
-func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage) {
+func (t *Engine) HandleIncomingTssMessage(msg *tsscommv1.PropagatedMessage) {
 	if t == nil {
 		return
 	}
 
-	switch m := msg.TssMessage.Payload.(type) {
-	case *gossipv1.PropagatedMessage_Unicast:
+	switch m := msg.Payload.(type) {
+	case *tsscommv1.PropagatedMessage_Unicast:
 		if err := t.handleUnicast(m); err != nil {
 			logErr(t.logger, err)
 			return
 		}
 
-	case *gossipv1.PropagatedMessage_Echo:
+	case *tsscommv1.PropagatedMessage_Echo:
 		shouldEcho, err := t.handleEcho(m)
 		if err != nil {
 			logErr(t.logger, err)
@@ -368,8 +364,8 @@ func (t *Engine) HandleIncomingTssMessage(msg *gossipv1.GossipMessage_TssMessage
 	}
 }
 
-func (t *Engine) sendEchoOut(m *gossipv1.PropagatedMessage_Echo) error {
-	echo, _ := proto.Clone(m.Echo).(*gossipv1.Echo)
+func (t *Engine) sendEchoOut(m *tsscommv1.PropagatedMessage_Echo) error {
+	echo, _ := proto.Clone(m.Echo).(*tsscommv1.Echo)
 	if err := t.signEcho(echo); err != nil {
 		return err
 	}
@@ -377,13 +373,9 @@ func (t *Engine) sendEchoOut(m *gossipv1.PropagatedMessage_Echo) error {
 	select {
 	case <-t.ctx.Done():
 		return t.ctx.Err()
-	case t.messageOutChan <- &gossipv1.GossipMessage{
-		Message: &gossipv1.GossipMessage_TssMessage{
-			TssMessage: &gossipv1.PropagatedMessage{
-				Payload: &gossipv1.PropagatedMessage_Echo{
-					Echo: echo,
-				},
-			},
+	case t.messageOutChan <- &tsscommv1.PropagatedMessage{
+		Payload: &tsscommv1.PropagatedMessage_Echo{
+			Echo: echo,
 		},
 	}:
 	}
@@ -393,7 +385,7 @@ func (t *Engine) sendEchoOut(m *gossipv1.PropagatedMessage_Echo) error {
 
 var errBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
 
-func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
+func (t *Engine) handleEcho(m *tsscommv1.PropagatedMessage_Echo) (bool, error) {
 	parsed, err := t.parseEcho(m)
 	if err != nil {
 		return false,
@@ -450,7 +442,7 @@ func (t *Engine) handleEcho(m *gossipv1.PropagatedMessage_Echo) (bool, error) {
 
 var errUnicastBadRound = fmt.Errorf("bad round for unicast (can accept round1Message1 and round2Message)")
 
-func (t *Engine) handleUnicast(m *gossipv1.PropagatedMessage_Unicast) error {
+func (t *Engine) handleUnicast(m *tsscommv1.PropagatedMessage_Unicast) error {
 	parsed, err := t.parseUnicast(m)
 	if err != nil {
 		if err == errUnicastNotForMe {
@@ -527,7 +519,7 @@ var (
 	ErrUnkownSender = fmt.Errorf("sender is not a known guardian")
 )
 
-func (t *Engine) parseEcho(m *gossipv1.PropagatedMessage_Echo) (tss.ParsedMessage, error) {
+func (t *Engine) parseEcho(m *tsscommv1.PropagatedMessage_Echo) (tss.ParsedMessage, error) {
 	echoMsg := m.Echo
 
 	if err := vaidateEchoCorrectForm(echoMsg); err != nil {
@@ -577,7 +569,7 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 
 var errUnicastNotForMe = fmt.Errorf("unicast message is not for me")
 
-func (t *Engine) parseUnicast(m *gossipv1.PropagatedMessage_Unicast) (tss.ParsedMessage, error) {
+func (t *Engine) parseUnicast(m *tsscommv1.PropagatedMessage_Unicast) (tss.ParsedMessage, error) {
 	msg := m.Unicast
 
 	if err := validateSignedMessageCorrectForm(msg); err != nil {
@@ -596,7 +588,7 @@ func (t *Engine) parseUnicast(m *gossipv1.PropagatedMessage_Unicast) (tss.Parsed
 	return tss.ParseWireMessage(msg.Payload, senderPid, false)
 }
 
-func (t *Engine) isUnicastForMe(msg *gossipv1.SignedMessage) bool {
+func (t *Engine) isUnicastForMe(msg *tsscommv1.SignedMessage) bool {
 	for _, v := range msg.Recipients {
 		if equalPartyIds(protoToPartyId(v), t.Self) {
 			return true

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/yossigi/tss-lib/v2/tss"
 	"google.golang.org/protobuf/proto"
 )
@@ -21,7 +21,7 @@ type voterId struct {
 type broadcaststate struct {
 	// The following three fields should not be changed after creation of broadcaststate:
 	timeReceived  time.Time
-	message       *gossipv1.SignedMessage
+	message       *tsscommv1.SignedMessage
 	messageDigest digest
 
 	votes map[voterId]signature
@@ -51,7 +51,7 @@ func (s *broadcaststate) shouldDeliver(f int) bool {
 
 var ErrEquivicatingGuardian = fmt.Errorf("equivication, guardian sent two different messages for the same round and session")
 
-func (s *broadcaststate) updateState(f int, msg *gossipv1.Echo) (shouldEcho bool, err error) {
+func (s *broadcaststate) updateState(f int, msg *tsscommv1.Echo) (shouldEcho bool, err error) {
 	isMsgSrc := equalPartyIds(protoToPartyId(msg.Echoer), protoToPartyId(msg.Message.Sender))
 
 	tmp, err := proto.Marshal(msg.Message)
@@ -93,7 +93,7 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 	return (st.Threshold) / 2 // this is the floor of the result.
 }
 
-func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg *gossipv1.Echo) (shouldEcho bool, shouldDeliver bool, err error) {
+func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg *tsscommv1.Echo) (shouldEcho bool, shouldDeliver bool, err error) {
 	d, err := t.getMessageUUID(parsed)
 	if err != nil {
 		return false, false, err
