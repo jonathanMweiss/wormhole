@@ -15,6 +15,10 @@ type ReliableMessageHandler interface {
 	HandleIncomingTssMessage(msg *tsscommv1.PropagatedMessage)
 	ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage // just need to propagate this through the p2p network
 }
+type MessageReceiver interface {
+	ReliableMessageHandler
+	FetchPartyId(*ecdsa.PublicKey) *tsscommv1.PartyId
+}
 
 // Signer is the interface to give any component with the ability to authorise a new threshold signature over a message.
 type Signer interface {

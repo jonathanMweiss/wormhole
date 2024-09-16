@@ -617,16 +617,17 @@ func GuardianOptionDirectNetworks(
 	// a list of hostnames.
 	peers []string,
 ) *GuardianOption {
+	serviceName := "tsscomm"
 	return &GuardianOption{
-		name:         "tsscomm",
+		name:         serviceName,
 		dependencies: []string{"processor"}, // TODO: I think it is dependant on it, since the TSS passes its signatures to the processor.
 		f: func(_ context.Context, logger *zap.Logger, g *G) error {
-			g.runnables["tsscomm"] = tsscomm.NewServer(&tsscomm.Parameters{
+			g.runnables[serviceName] = tsscomm.NewServer(&tsscomm.Parameters{
 				SocketPath:      socketPath,
 				SelfCredentials: selfCredentials,
 				CA:              CA,
 				Peers:           peers,
-				Logger:          logger,
+				Logger:          logger.Named(serviceName),
 				TssEngine:       g.tssEngine,
 			}).Run
 
