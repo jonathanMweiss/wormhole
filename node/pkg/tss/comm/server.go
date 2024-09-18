@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
-	"fmt"
 	"io"
-	"net"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
@@ -29,28 +27,33 @@ type redialResponse struct {
 	conn *connection
 }
 
+// used by tests: ensures we can change the Send(inStream) functionality of the server.
+type incomingStreamHandler interface {
+	handleIncomingStream(inStream tsscommv1.DirectLink_SendServer) error
+}
+
 type server struct {
 	tsscommv1.UnimplementedDirectLinkServer
 	ctx context.Context
 
-	params *Parameters
+	incomingStreamHandler incomingStreamHandler
+	params                *Parameters
+
 	// to ensure thread-safety without locks, only the sender is allowed to change this map.
 	connections map[string]*connection
-
-	gserver  *grpc.Server
-	listener net.Listener
 
 	requestRedial chan string
 	redials       chan redialResponse
 }
 
 func (s *server) run() {
-	go s.dialer()
+	go s.dailer()
+
 	for _, pid := range s.params.Peers {
 		s.enqueueRedialRequest(pid.Id)
 	}
-	go s.sender()
 
+	go s.sender()
 }
 
 func (s *server) sender() {
@@ -84,8 +87,6 @@ func (s *server) ensuredConnected() {
 		}
 	}
 }
-
-var errDisconnected = fmt.Errorf("disconnected form peer")
 
 func (s *server) send(msg *tsscommv1.PropagatedMessage) {
 	switch msg.Payload.(type) {
@@ -157,8 +158,7 @@ func (s *server) enqueueRedialRequest(hostname string) {
 	}
 }
 
-// goroutine ensuring connections are evenetually set.
-func (s *server) dialer() {
+func (s *server) dailer() {
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -239,6 +239,10 @@ func extractClientCert(ctx context.Context) (*ecdsa.PublicKey, error) {
 }
 
 func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
+	if s.incomingStreamHandler != nil {
+		return s.incomingStreamHandler.handleIncomingStream(inStream)
+	}
+
 	pk, err := extractClientCert(inStream.Context())
 	if err != nil {
 		s.params.Logger.Error(

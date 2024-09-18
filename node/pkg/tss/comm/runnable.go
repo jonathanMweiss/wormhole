@@ -37,35 +37,16 @@ func NewServer(params *Parameters) (DirectLink, error) {
 		return nil, err
 	}
 
-	laddr, err := net.ResolveUnixAddr("unix", params.SocketPath)
-	if err != nil {
-		return nil, fmt.Errorf("invalid listen address: %v", err)
-	}
-
-	l, err := net.ListenUnix("unix", laddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", params.SocketPath, err)
-	}
-
-	gserver := grpc.NewServer(
-	// TODO set credentials
-	// TODO: set CA as pool of certs of the guardians. each guardian is its own CA, and we know all of them.
-	)
-
 	s := &server{
 		UnimplementedDirectLinkServer: tsscommv1.UnimplementedDirectLinkServer{},
 		ctx:                           nil, // set up in Run(ctx)
 
 		params:      params,
 		connections: make(map[string]*connection, len(params.Peers)),
-		gserver:     gserver,
-		listener:    l,
 
 		requestRedial: make(chan string, len(params.Peers)),
 		redials:       make(chan redialResponse, 1),
 	}
-
-	tsscommv1.RegisterDirectLinkServer(gserver, s)
 
 	return s, nil
 }
@@ -82,21 +63,41 @@ func (s *server) Run(ctx context.Context) error {
 	}
 
 	s.ctx = ctx
-	s.params.Logger.Info("admin server listening on", zap.String("path", s.params.SocketPath))
+
+	laddr, err := net.ResolveUnixAddr("unix", s.params.SocketPath)
+	if err != nil {
+		return fmt.Errorf("invalid listen address: %v", err)
+	}
+
+	listener, err := net.ListenUnix("unix", laddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", s.params.SocketPath, err)
+	}
 
 	errC := make(chan error)
+	gserver := grpc.NewServer(
+	// TODO set credentials
+	// TODO: set CA as pool of certs of the guardians. each guardian is its own CA, and we know all of them.
+	)
 
-	go func() { errC <- s.gserver.Serve(s.listener) }()
+	tsscommv1.RegisterDirectLinkServer(gserver, s)
+
+	go func() {
+		errC <- gserver.Serve(listener)
+	}()
 	s.run()
 
-	var err error
+	s.params.Logger.Info("admin server listening on", zap.String("path", s.params.SocketPath))
+
 	select {
 	case <-ctx.Done():
 		err = ctx.Err()
 	case err = <-errC:
 	}
 
-	s.gserver.Stop()
+	gserver.Stop()
+	// TODO consider how to address this errors:
+	listener.Close()
 
 	return err
 }
