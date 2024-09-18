@@ -5,20 +5,16 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
-	"github.com/certusone/wormhole/node/pkg/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -292,7 +288,7 @@ func TestE2E(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*60)
 	defer cancel()
-	ctx = setSupervisor(ctx)
+	ctx = testutils.MakeSupervisorContext(ctx)
 
 	fmt.Println("starting engines.")
 	for _, engine := range engines {
@@ -314,26 +310,6 @@ func TestE2E(t *testing.T) {
 	case <-ctx.Done():
 		t.FailNow()
 	}
-}
-
-func setSupervisor(ctx context.Context) context.Context {
-	var supervisedCtx context.Context
-
-	logger := zap.New(
-		zapcore.NewCore(
-			zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
-			zapcore.AddSync(zapcore.Lock(os.Stderr)),
-			zap.NewAtomicLevelAt(zapcore.Level(zapcore.DebugLevel)),
-		),
-	)
-
-	supervisor.New(ctx, logger, func(ctx context.Context) error {
-		supervisedCtx = ctx
-		<-ctx.Done()
-		return ctx.Err()
-	})
-
-	return supervisedCtx
 }
 
 func TestMessagesWithBadRounds(t *testing.T) {
