@@ -102,6 +102,11 @@ func (t *Engine) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
 	return t.messageOutChan
 }
 
+// FetchPartyId implements ReliableTSS.
+func (t *Engine) FetchPartyId(*ecdsa.PublicKey) *tsscommv1.PartyId {
+	panic("FetchPartyId Not implemented yet.")
+}
+
 // BeginAsyncThresholdSigningProtocol used to start the TSS protocol over a specific msg.
 func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	if t == nil {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"net"
-	"sync/atomic"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
@@ -19,111 +19,192 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const (
-	disconnected uint32 = 0
-	connected    uint32 = 1
-)
-
 type connection struct {
 	cc     *grpc.ClientConn
 	stream tsscommv1.DirectLink_SendClient
+}
 
-	state atomic.Uint32
+type redialResponse struct {
+	name string
+	conn *connection
 }
 
 type server struct {
 	tsscommv1.UnimplementedDirectLinkServer
 	ctx context.Context
 
-	params      *Parameters
+	params *Parameters
+	// to ensure thread-safety without locks, only the sender is allowed to change this map.
 	connections map[string]*connection
 
 	gserver  *grpc.Server
 	listener net.Listener
+
+	requestRedial chan string
+	redials       chan redialResponse
 }
 
-func (s *server) establishConnections(errChn chan error) {
-	// TODO: to avoid the following, we need to set each connection with its own goroutine.
-	// for c:= range connection {
-	// 		c.send() // blocking
-	// }
+func (s *server) run() {
+	go s.dialer()
+	for _, pid := range s.params.Peers {
+		s.enqueueRedialRequest(pid.Id)
+	}
+	go s.sender()
 
-	// TODO: make the dailer goroutine able to attempt reconnection with some node that fails.
-	// for instance was connected, then for some reason a connection fails, then the dailer will eventually attempt to redial.
-	go s.worker()
 }
 
-// worker is responsible for dialing +
-func (s *server) worker() {
-	tick := time.NewTicker(time.Second * 5)
-	tickChan := tick.C
-	allConnected := false
-	var failedToSend []*tsscommv1.PropagatedMessage
+func (s *server) sender() {
+	connectionCheckTicker := time.NewTicker(time.Second * 5)
 	for {
 		select {
 		case <-s.ctx.Done():
+			// TODO: ensure streams and conns are closed.
 			return
+
 		case o := <-s.params.TssEngine.ProducedOutputMessages():
-			if err := s.send(o); err != nil {
-				failedToSend = append(failedToSend, o)
-			}
+			//TODO: Ensure malicious server can't block a broadcast.
+			s.send(o)
+		case redial := <-s.redials:
+			s.connections[redial.name] = redial.conn
 
-		case <-tickChan:
-			if !allConnected {
-				allConnected = s.dialer()
-			}
+		case <-connectionCheckTicker.C:
+			// this case is an ensurance.
+			s.ensuredConnected()
+		}
+	}
+}
 
-			if len(failedToSend) > 0 {
-				for msg := range failedToSend {
-					s.send(msg)
-				}
-
-				failedToSend = nil
+func (s *server) ensuredConnected() {
+	if len(s.connections) != len(s.params.Peers) {
+		for _, pid := range s.params.Peers {
+			hostname := pid.Id
+			if _, ok := s.connections[hostname]; !ok {
+				s.enqueueRedialRequest(hostname)
 			}
 		}
+	}
+}
+
+var errDisconnected = fmt.Errorf("disconnected form peer")
+
+func (s *server) send(msg *tsscommv1.PropagatedMessage) {
+	switch msg.Payload.(type) {
+	case *tsscommv1.PropagatedMessage_Echo:
+		s.broadcast(msg)
+
+	case *tsscommv1.PropagatedMessage_Unicast:
+		s.unicast(msg)
+	}
+}
+
+func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
+	m, ok := msg.Payload.(*tsscommv1.PropagatedMessage_Unicast)
+	if !ok {
+		panic("unicast should always be called with payload of type PropagatedMessage_Unicast")
+	}
+
+	for _, recipient := range m.Unicast.Recipients {
+		hostname := recipient.Id
+		conn, ok := s.connections[recipient.Id]
+		if !ok {
+			delete(s.connections, hostname)
+			s.enqueueRedialRequest(hostname)
+
+			s.params.Logger.Error(
+				"received unknown recipient",
+				zap.String("hostname", recipient.Id),
+			)
+			continue
+		}
+
+		if err := conn.stream.Send(msg); err != nil {
+			delete(s.connections, hostname)
+			s.enqueueRedialRequest(hostname)
+
+			s.params.Logger.Warn(
+				"couldn't send message to peer.",
+				zap.String("hostname", recipient.Id),
+				zap.Error(err),
+			)
+		}
+	}
+}
+
+func (s *server) broadcast(msg *tsscommv1.PropagatedMessage) {
+	for id, conn := range s.connections {
+		if err := conn.stream.Send(msg); err != nil {
+			delete(s.connections, id)
+			s.enqueueRedialRequest(id)
+
+			s.params.Logger.Warn(
+				"couldn't send broadcast message to peer.",
+				zap.String("hostname", id),
+				zap.Error(err),
+			)
+		}
+	}
+}
+
+func (s *server) enqueueRedialRequest(hostname string) {
+	select {
+	case <-s.ctx.Done():
+		return
+	case s.requestRedial <- hostname:
+		s.params.Logger.Debug("requested redial", zap.String("hostname", hostname))
+		return
+	default:
+		s.params.Logger.Warn("redial attempt failed", zap.String("hostname", hostname))
 	}
 }
 
 // goroutine ensuring connections are evenetually set.
-func (s *server) dialer() (allConnected bool) {
+func (s *server) dialer() {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
 
-	allConnected = true
-	for _, hostname := range s.params.Peers {
-		con := s.connections[hostname.Id]
-		if disconnected != con.state.Load() {
-			continue
+		case hostname := <-s.requestRedial:
+			// TODO: add credentials
+			cc, err := grpc.Dial(hostname, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				s.params.Logger.Error(
+					"direct connection to peer failed",
+					zap.Error(err),
+					zap.String("hostname", hostname),
+				)
+
+				s.enqueueRedialRequest(hostname)
+				time.Sleep(time.Millisecond * 10)
+
+				continue
+			}
+
+			stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
+			if err != nil {
+				cc.Close()
+
+				s.params.Logger.Error(
+					"setting direct stream to peer failed",
+					zap.Error(err),
+					zap.String("hostname", hostname),
+				)
+
+				s.enqueueRedialRequest(hostname)
+				time.Sleep(time.Millisecond * 10)
+
+				continue
+			}
+
+			s.redials <- redialResponse{
+				name: hostname,
+				conn: &connection{
+					cc:     cc,
+					stream: stream,
+				},
+			}
 		}
-
-		// TODO: add credentials
-		cc, err := grpc.Dial(hostname.Id, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			s.params.Logger.Error(
-				"direct connection to peer failed",
-				zap.Error(err),
-				zap.String("hostname", hostname.Id),
-			)
-			allConnected = false
-			continue
-		}
-
-		stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
-		if err != nil {
-			cc.Close()
-			s.params.Logger.Error(
-				"setting direct stream to peer failed",
-				zap.Error(err),
-				zap.String("hostname", hostname.Id),
-			)
-			allConnected = false
-			continue
-		}
-
-		con.cc = cc
-		con.stream = stream
-		con.state.Store(connected)
 	}
-
-	return allConnected
 }
 
 func extractClientCert(ctx context.Context) (*ecdsa.PublicKey, error) {

@@ -23,13 +23,13 @@ type Parameters struct {
 	SelfCredentials tls.Certificate
 
 	Logger    *zap.Logger
-	TssEngine tss.MessageReceiver
+	TssEngine tss.ReliableMessageHandler
 
 	// PartyId.ID  == hostname.
 	// partyId.Key == self signed certificate.
 	// Moniker can be anything.
 	// Index doesn't matter for this service.
-	Peers []tsscommv1.PartyId
+	Peers []*tsscommv1.PartyId
 }
 
 func NewServer(params *Parameters) (DirectLink, error) {
@@ -48,27 +48,21 @@ func NewServer(params *Parameters) (DirectLink, error) {
 	}
 
 	gserver := grpc.NewServer(
-	// TODO set credentials and known CA.
+	// TODO set credentials
 	// TODO: set CA as pool of certs of the guardians. each guardian is its own CA, and we know all of them.
 	)
 
-	conns := make(map[string]*connection, len(params.Peers))
-	for _, pid := range params.Peers {
-		conns[pid.Id] = &connection{
-			cc:     nil,
-			stream: nil,
-		}
-	}
-
 	s := &server{
 		UnimplementedDirectLinkServer: tsscommv1.UnimplementedDirectLinkServer{},
-		ctx:                           nil, // to be set in Run(ctx context.Context).
-		params:                        params,
+		ctx:                           nil, // set up in Run(ctx)
 
-		connections: conns,
+		params:      params,
+		connections: make(map[string]*connection, len(params.Peers)),
+		gserver:     gserver,
+		listener:    l,
 
-		gserver:  gserver,
-		listener: l,
+		requestRedial: make(chan string, len(params.Peers)),
+		redials:       make(chan redialResponse, 1),
 	}
 
 	tsscommv1.RegisterDirectLinkServer(gserver, s)
@@ -91,9 +85,9 @@ func (s *server) Run(ctx context.Context) error {
 	s.params.Logger.Info("admin server listening on", zap.String("path", s.params.SocketPath))
 
 	errC := make(chan error)
-	go func() { errC <- s.gserver.Serve(s.listener) }()
 
-	s.establishConnections(errC)
+	go func() { errC <- s.gserver.Serve(s.listener) }()
+	s.run()
 
 	var err error
 	select {

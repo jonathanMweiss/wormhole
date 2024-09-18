@@ -14,9 +14,6 @@ type ReliableMessageHandler interface {
 	// HandleIncomingTssMessage receives a network message and process it using a reliable-broadcast protocol.
 	HandleIncomingTssMessage(msg *tsscommv1.PropagatedMessage)
 	ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage // just need to propagate this through the p2p network
-}
-type MessageReceiver interface {
-	ReliableMessageHandler
 	FetchPartyId(*ecdsa.PublicKey) *tsscommv1.PartyId
 }
 

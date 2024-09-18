@@ -619,12 +619,12 @@ func Run(params *RunParams) func(ctx context.Context) error {
 				select {
 				case <-ctx.Done():
 					return
-				case msg := <-params.tssMessageHandler.ProducedOutputMessages():
-					if err := publishGossipMsg(ctx, controlPubsubTopic, msg); err != nil {
-						logger.Error("failed to publish TSS message", zap.Error(err))
-						continue
-					}
-					p2pMessagesSent.WithLabelValues("control").Inc()
+				// case msg := <-params.tssMessageHandler.ProducedOutputMessages():
+				// if err := publishGossipMsg(ctx, controlPubsubTopic, msg); err != nil {
+				// 	logger.Error("failed to publish TSS message", zap.Error(err))
+				// 	continue
+				// }
+				// p2pMessagesSent.WithLabelValues("control").Inc()
 
 				case msg := <-params.gossipControlSendC:
 					if GossipCutoverComplete() {
@@ -763,7 +763,7 @@ func Run(params *RunParams) func(ctx context.Context) error {
 
 					switch m := msg.Message.(type) {
 					case *gossipv1.GossipMessage_TssMessage:
-						params.tssMessageHandler.HandleIncomingTssMessage(m)
+						// params.tssMessageHandler.HandleIncomingTssMessage(m)
 					case *gossipv1.GossipMessage_SignedHeartbeat:
 						s := m.SignedHeartbeat
 						gs := params.gst.Get()
