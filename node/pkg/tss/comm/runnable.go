@@ -3,7 +3,6 @@ package comm
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net"
 
@@ -22,10 +21,15 @@ type DirectLink interface {
 type Parameters struct {
 	SocketPath      string
 	SelfCredentials tls.Certificate
-	CA              x509.Certificate
-	Peers           []string
-	Logger          *zap.Logger
-	TssEngine       tss.MessageReceiver
+
+	Logger    *zap.Logger
+	TssEngine tss.MessageReceiver
+
+	// PartyId.ID  == hostname.
+	// partyId.Key == self signed certificate.
+	// Moniker can be anything.
+	// Index doesn't matter for this service.
+	Peers []tsscommv1.PartyId
 }
 
 func NewServer(params *Parameters) (DirectLink, error) {
@@ -45,14 +49,23 @@ func NewServer(params *Parameters) (DirectLink, error) {
 
 	gserver := grpc.NewServer(
 	// TODO set credentials and known CA.
+	// TODO: set CA as pool of certs of the guardians. each guardian is its own CA, and we know all of them.
 	)
+
+	conns := make(map[string]*connection, len(params.Peers))
+	for _, pid := range params.Peers {
+		conns[pid.Id] = &connection{
+			cc:     nil,
+			stream: nil,
+		}
+	}
 
 	s := &server{
 		UnimplementedDirectLinkServer: tsscommv1.UnimplementedDirectLinkServer{},
 		ctx:                           nil, // to be set in Run(ctx context.Context).
 		params:                        params,
 
-		connections: map[string]outConnection{},
+		connections: conns,
 
 		gserver:  gserver,
 		listener: l,

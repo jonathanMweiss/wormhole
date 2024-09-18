@@ -6,19 +6,29 @@ import (
 	"crypto/x509"
 	"io"
 	"net"
+	"sync/atomic"
+	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
-type outConnection struct {
-	stream            tsscommv1.DirectLink_SendClient
-	sendToNetworkChan chan tsscommv1.PropagatedMessage
+const (
+	disconnected uint32 = 0
+	connected    uint32 = 1
+)
+
+type connection struct {
+	cc     *grpc.ClientConn
+	stream tsscommv1.DirectLink_SendClient
+
+	state atomic.Uint32
 }
 
 type server struct {
@@ -26,7 +36,7 @@ type server struct {
 	ctx context.Context
 
 	params      *Parameters
-	connections map[string]outConnection
+	connections map[string]*connection
 
 	gserver  *grpc.Server
 	listener net.Listener
@@ -38,8 +48,62 @@ func (s *server) establishConnections(errChn chan error) {
 	// 		c.send() // blocking
 	// }
 
-	for range s.params.Peers {
-		// TODO
+	// TODO: make the dailer goroutine able to attempt reconnection with some node that fails.
+	// for instance was connected, then for some reason a connection fails, then the dailer will eventually attempt to redial.
+	go s.dialer()
+	// go s.sender()
+}
+
+// goroutine ensuring connections are evenetually set.
+func (s *server) dialer() {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
+		failedToConnect := false
+		for _, hostname := range s.params.Peers {
+			con := s.connections[hostname.Id]
+			if disconnected != con.state.Load() {
+				continue
+			}
+
+			// TODO: add credentials
+			cc, err := grpc.Dial(hostname.Id, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				s.params.Logger.Error(
+					"direct connection to peer failed",
+					zap.Error(err),
+					zap.String("hostname", hostname.Id),
+				)
+				failedToConnect = true
+				continue
+			}
+
+			stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
+			if err != nil {
+				cc.Close()
+				s.params.Logger.Error(
+					"setting direct stream to peer failed",
+					zap.Error(err),
+					zap.String("hostname", hostname.Id),
+				)
+				failedToConnect = true
+				continue
+			}
+
+			con.cc = cc
+			con.stream = stream
+			con.state.Store(connected)
+		}
+
+		if !failedToConnect {
+			return
+		}
+
+		time.Sleep(time.Second * 5)
 	}
 }
 
