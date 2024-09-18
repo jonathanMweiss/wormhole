@@ -32,12 +32,8 @@ type Parameters struct {
 	Peers []*tsscommv1.PartyId
 }
 
-func NewServer(params *Parameters) (DirectLink, error) {
-	if err := validateParams(params); err != nil {
-		return nil, err
-	}
-
-	s := &server{
+func NewServer(params *Parameters) DirectLink {
+	return &server{
 		UnimplementedDirectLinkServer: tsscommv1.UnimplementedDirectLinkServer{},
 		ctx:                           nil, // set up in Run(ctx)
 
@@ -47,12 +43,6 @@ func NewServer(params *Parameters) (DirectLink, error) {
 		requestRedial: make(chan string, len(params.Peers)),
 		redials:       make(chan redialResponse, 1),
 	}
-
-	return s, nil
-}
-
-func validateParams(params *Parameters) error {
-	return nil // TODO.
 }
 
 // Run initialise the server and starts listening on the socket.
@@ -64,14 +54,9 @@ func (s *server) Run(ctx context.Context) error {
 
 	s.ctx = ctx
 
-	laddr, err := net.ResolveUnixAddr("unix", s.params.SocketPath)
+	listener, err := net.Listen("tcp", s.params.SocketPath)
 	if err != nil {
-		return fmt.Errorf("invalid listen address: %v", err)
-	}
-
-	listener, err := net.ListenUnix("unix", laddr)
-	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", s.params.SocketPath, err)
+		return err
 	}
 
 	errC := make(chan error)

@@ -27,17 +27,11 @@ type redialResponse struct {
 	conn *connection
 }
 
-// used by tests: ensures we can change the Send(inStream) functionality of the server.
-type incomingStreamHandler interface {
-	handleIncomingStream(inStream tsscommv1.DirectLink_SendServer) error
-}
-
 type server struct {
 	tsscommv1.UnimplementedDirectLinkServer
 	ctx context.Context
 
-	incomingStreamHandler incomingStreamHandler
-	params                *Parameters
+	params *Parameters
 
 	// to ensure thread-safety without locks, only the sender is allowed to change this map.
 	connections map[string]*connection
@@ -108,7 +102,6 @@ func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
 		hostname := recipient.Id
 		conn, ok := s.connections[recipient.Id]
 		if !ok {
-			delete(s.connections, hostname)
 			s.enqueueRedialRequest(hostname)
 
 			s.params.Logger.Error(
@@ -160,12 +153,12 @@ func (s *server) enqueueRedialRequest(hostname string) {
 
 func (s *server) dailer() {
 	for {
+		time.Sleep(time.Millisecond * 100)
 		select {
 		case <-s.ctx.Done():
 			return
 
 		case hostname := <-s.requestRedial:
-			// TODO: add credentials
 			cc, err := grpc.Dial(hostname, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
 				s.params.Logger.Error(
@@ -239,10 +232,6 @@ func extractClientCert(ctx context.Context) (*ecdsa.PublicKey, error) {
 }
 
 func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
-	if s.incomingStreamHandler != nil {
-		return s.incomingStreamHandler.handleIncomingStream(inStream)
-	}
-
 	pk, err := extractClientCert(inStream.Context())
 	if err != nil {
 		s.params.Logger.Error(
