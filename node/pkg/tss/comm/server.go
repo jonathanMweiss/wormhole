@@ -50,61 +50,80 @@ func (s *server) establishConnections(errChn chan error) {
 
 	// TODO: make the dailer goroutine able to attempt reconnection with some node that fails.
 	// for instance was connected, then for some reason a connection fails, then the dailer will eventually attempt to redial.
-	go s.dialer()
-	// go s.sender()
+	go s.worker()
 }
 
-// goroutine ensuring connections are evenetually set.
-func (s *server) dialer() {
+// worker is responsible for dialing +
+func (s *server) worker() {
+	tick := time.NewTicker(time.Second * 5)
+	tickChan := tick.C
+	allConnected := false
+	var failedToSend []*tsscommv1.PropagatedMessage
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
-		default:
-		}
-
-		failedToConnect := false
-		for _, hostname := range s.params.Peers {
-			con := s.connections[hostname.Id]
-			if disconnected != con.state.Load() {
-				continue
+		case o := <-s.params.TssEngine.ProducedOutputMessages():
+			if err := s.send(o); err != nil {
+				failedToSend = append(failedToSend, o)
 			}
 
-			// TODO: add credentials
-			cc, err := grpc.Dial(hostname.Id, grpc.WithTransportCredentials(insecure.NewCredentials()))
-			if err != nil {
-				s.params.Logger.Error(
-					"direct connection to peer failed",
-					zap.Error(err),
-					zap.String("hostname", hostname.Id),
-				)
-				failedToConnect = true
-				continue
+		case <-tickChan:
+			if !allConnected {
+				allConnected = s.dialer()
 			}
 
-			stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
-			if err != nil {
-				cc.Close()
-				s.params.Logger.Error(
-					"setting direct stream to peer failed",
-					zap.Error(err),
-					zap.String("hostname", hostname.Id),
-				)
-				failedToConnect = true
-				continue
+			if len(failedToSend) > 0 {
+				for msg := range failedToSend {
+					s.send(msg)
+				}
+
+				failedToSend = nil
 			}
-
-			con.cc = cc
-			con.stream = stream
-			con.state.Store(connected)
 		}
-
-		if !failedToConnect {
-			return
-		}
-
-		time.Sleep(time.Second * 5)
 	}
+}
+
+// goroutine ensuring connections are evenetually set.
+func (s *server) dialer() (allConnected bool) {
+
+	allConnected = true
+	for _, hostname := range s.params.Peers {
+		con := s.connections[hostname.Id]
+		if disconnected != con.state.Load() {
+			continue
+		}
+
+		// TODO: add credentials
+		cc, err := grpc.Dial(hostname.Id, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			s.params.Logger.Error(
+				"direct connection to peer failed",
+				zap.Error(err),
+				zap.String("hostname", hostname.Id),
+			)
+			allConnected = false
+			continue
+		}
+
+		stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
+		if err != nil {
+			cc.Close()
+			s.params.Logger.Error(
+				"setting direct stream to peer failed",
+				zap.Error(err),
+				zap.String("hostname", hostname.Id),
+			)
+			allConnected = false
+			continue
+		}
+
+		con.cc = cc
+		con.stream = stream
+		con.state.Store(connected)
+	}
+
+	return allConnected
 }
 
 func extractClientCert(ctx context.Context) (*ecdsa.PublicKey, error) {
