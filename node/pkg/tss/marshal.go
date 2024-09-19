@@ -3,13 +3,15 @@ package tss
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/sha512"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"os"
 
+	"github.com/certusone/wormhole/node/pkg/tss/internal"
 	"github.com/yossigi/tss-lib/v2/crypto"
 	"github.com/yossigi/tss-lib/v2/tss"
 )
@@ -105,40 +107,23 @@ func (s *GuardianStorage) load(storagePath string) error {
 		return fmt.Errorf("invalid public key, it isn't on the curve")
 	}
 
-	if len(s.Symkeys) != len(s.Guardians) {
-		if err := s.createSharedSecrets(); err != nil {
-			return err
-		}
+	tlsCert, err := tls.X509KeyPair(s.TlsX509, s.TlsPrivateKey)
+	if err != nil {
+		return fmt.Errorf("error loading tls cert: %v", err)
+	}
+	s.tlsCert = &tlsCert
+
+	if len(s.GuardianCerts) != len(s.Guardians) {
+		return fmt.Errorf("number of guardians and guardiansCerts do not match")
 	}
 
-	return nil
-}
-
-func (s *GuardianStorage) createSharedSecrets() error {
-	curve := tss.S256()
-	s.Symkeys = make([]symKey, len(s.Guardians))
-
-	for i, g := range s.Guardians {
-		gpk, err := unmarshalEcdsaPublickey(curve, g.Key)
+	s.guardiansCerts = make([]*x509.Certificate, len(s.Guardians))
+	for i, cert := range s.GuardianCerts {
+		c, err := internal.PemToCert(cert)
 		if err != nil {
-			return errors.New("failed to unmarshal public key")
+			return fmt.Errorf("error parsing guardian %v cert: %v", i, err)
 		}
-
-		x, y := curve.ScalarMult(gpk.X, gpk.Y, s.SecretKey)
-		sharedKey, err := crypto.NewECPoint(curve, x, y)
-		if err != nil {
-			return err
-		}
-
-		// TODO: Ensure that GobEncode is deterministic. otherwise symkey will be for each guardian in the pair.
-		sharedKeyBytes, err := sharedKey.GobEncode()
-		if err != nil {
-			return err
-		}
-
-		// reducing the bytes of the sharedKey to 32 bytes (using sha512_256 to avoid collisions).
-		tmp := sha512.Sum512_256(sharedKeyBytes)
-		s.Symkeys[i] = tmp[:]
+		s.guardiansCerts[i] = c
 	}
 
 	return nil

@@ -3,6 +3,8 @@ package tss
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -47,17 +49,27 @@ type Engine struct {
 	received map[digest]*broadcaststate
 }
 
+type PEM []byte
+
 // GuardianStorage is a struct that holds the data needed for a guardian to participate in the TSS protocol
 // including its signing key, and the shared symmetric keys with other guardians.
 // should be loaded from a file.
 type GuardianStorage struct {
 	Self *tss.PartyID
 
-	//Stored sorted by Key. include Self.
-	Guardians []*tss.PartyID
-
 	// SecretKey is the marshaled secret key of ReliableTSS, used to genereate SymKeys and signingKey.
 	SecretKey []byte
+	// should be a certificate generated with SecretKey
+	TlsX509       PEM
+	TlsPrivateKey PEM
+	tlsCert       *tls.Certificate
+
+	// Stored sorted by Key. include Self.
+	Guardians []*tss.PartyID
+
+	// guardianCert[i] should be the x509.Cert of guardians[i]. (uses p256, since golang x509 doesn't support secp256k1)
+	GuardianCerts  []PEM
+	guardiansCerts []*x509.Certificate
 
 	// Assumes threshold = 2f+1, where f is the maximal expected number of faulty nodes.
 	Threshold int
@@ -65,10 +77,9 @@ type GuardianStorage struct {
 	// all secret keys should be generated with specific value.
 	SavedSecretParameters *keygen.LocalPartySaveData
 
-	signingKey *ecdsa.PrivateKey // should be the unmarshalled value of signing key.
-	Symkeys    []symKey          // should be generated upon creation using DH shared key protocol if nil.
-
 	LoadDistributionKey []byte
+
+	signingKey *ecdsa.PrivateKey // should be the unmarshalled value of signing key.
 }
 
 func (g *GuardianStorage) contains(pid *tss.PartyID) bool {

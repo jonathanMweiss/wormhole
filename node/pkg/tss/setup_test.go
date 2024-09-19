@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
+	"github.com/certusone/wormhole/node/pkg/tss/internal"
 	"github.com/stretchr/testify/assert"
 	"github.com/yossigi/tss-lib/v2/ecdsa/keygen"
 	"github.com/yossigi/tss-lib/v2/tss"
@@ -24,7 +25,19 @@ const (
 
 type dkgSetupPlayer struct {
 	SecretKey []byte
+	secretKey *ecdsa.PrivateKey
 	*tss.PartyID
+
+	//generated from the secretKey.
+
+	// sorted according to theIdToPIDMapping.
+	peerCerts     []PEM
+	tlsPEM        PEM
+	tlsPrivateKey PEM
+
+	//same for all guardians
+	LoadDistributionKey []byte
+
 	*tss.PeerContext
 	*tss.Parameters
 	IdToPIDmapping map[string]*tss.PartyID
@@ -68,7 +81,7 @@ func TestMarshalPK(t *testing.T) {
 }
 
 func TestSetUpGroup(t *testing.T) {
-	t.SkipNow() // manual test only.
+	// t.SkipNow() // manual test only.
 	a := assert.New(t)
 
 	all := setupPlayers(a)
@@ -147,18 +160,8 @@ keygenLoop:
 		}
 	}
 
-	// shared across all guardians.
-	loadBalancingKey := make([]byte, 32)
-	_, err := rand.Read(loadBalancingKey)
-	a.NoError(err)
-
 	for i, guardian := range guardians {
 		a.NotNil(guardian)
-		a.NoError(guardian.createSharedSecrets())
-
-		tmp := make([]byte, 32)
-		copy(tmp, loadBalancingKey)
-		guardian.LoadDistributionKey = tmp
 
 		bts, err := json.MarshalIndent(guardian, "", "  ")
 		a.NoError(err)
@@ -181,6 +184,7 @@ func setupPlayers(a *assert.Assertions) []*dkgSetupPlayer {
 }
 
 func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
+	// TODO: Set up certificates in here.
 	all := make([]*dkgSetupPlayer, Participants)
 	partyIDS := make(tss.UnSortedPartyIDs, Participants)
 	for i := 0; i < Participants; i++ {
@@ -200,6 +204,7 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 
 		all[i] = &dkgSetupPlayer{
 			SecretKey:      marshalEcdsaSecretkey(orderedKeysByPublicKey[i]),
+			secretKey:      orderedKeysByPublicKey[i],
 			PartyID:        partyIDS[i],
 			PeerContext:    nil, // known only all player IDs are known.
 			Parameters:     nil,
@@ -209,14 +214,33 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 
 	sortedPartyIDS := tss.SortPartyIDs(partyIDS)
 	IdToPIDmapping := map[string]*tss.PartyID{}
+
 	for _, player := range all {
 		IdToPIDmapping[player.PartyID.Id] = player.PartyID
 	}
 
-	for _, player := range all {
+	loadBalancingKey := make([]byte, 32)
+	_, err := rand.Read(loadBalancingKey)
+	if err != nil {
+		panic(err)
+	}
+
+	x509Certs := make([]PEM, len(sortedPartyIDS))
+	for i, player := range all {
 		player.PeerContext = tss.NewPeerContext(sortedPartyIDS)
 		player.Parameters = tss.NewParameters(tss.S256(), player.PeerContext, player.PartyID, Participants, Threshold)
 		player.IdToPIDmapping = IdToPIDmapping
+
+		x509, privateKey := internal.NewTLSCredentials()
+		x509Certs[i] = internal.CertToPem(x509)
+
+		player.peerCerts = x509Certs
+		player.tlsPEM = internal.CertToPem(x509)
+		player.tlsPrivateKey = internal.KeyToPem(privateKey)
+
+		tmp := make([]byte, 32)
+		copy(tmp, loadBalancingKey)
+		player.LoadDistributionKey = tmp
 
 		player.setNewKeygenHandler()
 	}
@@ -259,13 +283,21 @@ func (player *dkgSetupPlayer) handleKeygenEndMessage(m *keygen.LocalPartySaveDat
 	if err != nil {
 		panic(err)
 	}
+
 	guardians[i] = &GuardianStorage{
-		Self:                  player.PartyID,
-		Guardians:             player.PeerContext.IDs(),
-		SecretKey:             player.SecretKey,
+		Self:      player.PartyID,
+		SecretKey: player.SecretKey,
+
+		Guardians: player.PeerContext.IDs(),
+
+		TlsX509:       player.tlsPEM,
+		TlsPrivateKey: player.tlsPrivateKey,
+
+		GuardianCerts: player.peerCerts,
+
 		Threshold:             Threshold,
 		SavedSecretParameters: m,
-
-		LoadDistributionKey: []byte{},
+		LoadDistributionKey:   player.LoadDistributionKey,
+		signingKey:            &ecdsa.PrivateKey{},
 	}
 }
