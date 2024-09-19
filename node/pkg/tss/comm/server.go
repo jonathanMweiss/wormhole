@@ -2,12 +2,13 @@ package comm
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"crypto/x509"
 	"io"
+	"strings"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
+	"github.com/certusone/wormhole/node/pkg/tss"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -29,13 +30,15 @@ type redialResponse struct {
 
 type server struct {
 	tsscommv1.UnimplementedDirectLinkServer
-	ctx context.Context
+	ctx        context.Context
+	logger     *zap.Logger
+	socketPath string
 
-	params *Parameters
+	tssMessenger tss.ReliableMessenger
 
+	peers []*tsscommv1.PartyId
 	// to ensure thread-safety without locks, only the sender is allowed to change this map.
-	connections map[string]*connection
-
+	connections   map[string]*connection
 	requestRedial chan string
 	redials       chan redialResponse
 }
@@ -43,7 +46,7 @@ type server struct {
 func (s *server) run() {
 	go s.dailer()
 
-	for _, pid := range s.params.Peers {
+	for _, pid := range s.peers {
 		s.enqueueRedialRequest(pid.Id)
 	}
 
@@ -58,7 +61,7 @@ func (s *server) sender() {
 			// TODO: ensure streams and conns are closed.
 			return
 
-		case o := <-s.params.TssEngine.ProducedOutputMessages():
+		case o := <-s.tssMessenger.ProducedOutputMessages():
 			//TODO: Ensure malicious server can't block a broadcast.
 			s.send(o)
 		case redial := <-s.redials:
@@ -72,8 +75,8 @@ func (s *server) sender() {
 }
 
 func (s *server) ensuredConnected() {
-	if len(s.connections) != len(s.params.Peers) {
-		for _, pid := range s.params.Peers {
+	if len(s.connections) != len(s.peers) {
+		for _, pid := range s.peers {
 			hostname := pid.Id
 			if _, ok := s.connections[hostname]; !ok {
 				s.enqueueRedialRequest(hostname)
@@ -104,7 +107,7 @@ func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
 		if !ok {
 			s.enqueueRedialRequest(hostname)
 
-			s.params.Logger.Error(
+			s.logger.Error(
 				"received unknown recipient",
 				zap.String("hostname", recipient.Id),
 			)
@@ -115,7 +118,7 @@ func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
 			delete(s.connections, hostname)
 			s.enqueueRedialRequest(hostname)
 
-			s.params.Logger.Warn(
+			s.logger.Warn(
 				"couldn't send message to peer.",
 				zap.String("hostname", recipient.Id),
 				zap.Error(err),
@@ -130,7 +133,7 @@ func (s *server) broadcast(msg *tsscommv1.PropagatedMessage) {
 			delete(s.connections, id)
 			s.enqueueRedialRequest(id)
 
-			s.params.Logger.Warn(
+			s.logger.Warn(
 				"couldn't send broadcast message to peer.",
 				zap.String("hostname", id),
 				zap.Error(err),
@@ -144,10 +147,10 @@ func (s *server) enqueueRedialRequest(hostname string) {
 	case <-s.ctx.Done():
 		return
 	case s.requestRedial <- hostname:
-		s.params.Logger.Debug("requested redial", zap.String("hostname", hostname))
+		s.logger.Debug("requested redial", zap.String("hostname", hostname))
 		return
 	default:
-		s.params.Logger.Warn("redial attempt failed", zap.String("hostname", hostname))
+		s.logger.Warn("redial attempt failed", zap.String("hostname", hostname))
 	}
 }
 
@@ -161,7 +164,7 @@ func (s *server) dailer() {
 		case hostname := <-s.requestRedial:
 			cc, err := grpc.Dial(hostname, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
-				s.params.Logger.Error(
+				s.logger.Error(
 					"direct connection to peer failed",
 					zap.Error(err),
 					zap.String("hostname", hostname),
@@ -177,7 +180,7 @@ func (s *server) dailer() {
 			if err != nil {
 				cc.Close()
 
-				s.params.Logger.Error(
+				s.logger.Error(
 					"setting direct stream to peer failed",
 					zap.Error(err),
 					zap.String("hostname", hostname),
@@ -200,7 +203,7 @@ func (s *server) dailer() {
 	}
 }
 
-func extractClientCert(ctx context.Context) (*ecdsa.PublicKey, error) {
+func extractClientCert(ctx context.Context) (*x509.Certificate, error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.InvalidArgument, "unable to retrieve peer from context")
@@ -222,19 +225,13 @@ func extractClientCert(ctx context.Context) (*ecdsa.PublicKey, error) {
 		return nil, status.Error(codes.InvalidArgument, "certificate must use ECDSA")
 	}
 
-	// get public key from client certificate.
-	pk, ok := clientCert.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "certificate doesn't hold ecdas public key")
-	}
-
-	return pk, nil
+	return clientCert, nil
 }
 
 func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
-	pk, err := extractClientCert(inStream.Context())
+	cert, err := extractClientCert(inStream.Context())
 	if err != nil {
-		s.params.Logger.Error(
+		s.logger.Error(
 			"failed to receive incoming stream",
 			zap.Error(err),
 		)
@@ -242,7 +239,7 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 		return err
 	}
 
-	clientId := s.params.TssEngine.FetchPartyId(pk)
+	clientId := s.tssMessenger.FetchPartyId(cert)
 
 	// TODO: Ensure that only a single Send() is called at most once by each peer.
 	for {
@@ -251,24 +248,34 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 		m, err := inStream.Recv()
 		if err != nil {
 			if err == io.EOF {
-				s.params.Logger.Info("closing input stream")
+				s.logger.Info("closing input stream")
 				// TODO: State the client disconnected.
 				return nil
 			}
 
 			// TODO add identifier of the guardian.
-			s.params.Logger.Error("error receiving from guardian. Closing connection", zap.Error(err))
+			s.logger.Error("error receiving from guardian. Closing connection", zap.Error(err))
 			return err
 		}
 
-		// ensuring received message has the ID of the correct sender.
-		switch v := m.Payload.(type) {
-		case *tsscommv1.PropagatedMessage_Echo:
-			v.Echo.Echoer = clientId
-		case *tsscommv1.PropagatedMessage_Unicast:
-			v.Unicast.Sender = clientId
-		}
+		// (SECURITY measure): ensuring received message has the ID of the correct sender.
+		overwriteSenderID(m, clientId)
 
-		s.params.TssEngine.HandleIncomingTssMessage(m)
+		s.tssMessenger.HandleIncomingTssMessage(m)
 	}
+}
+
+func overwriteSenderID(m *tsscommv1.PropagatedMessage, clientId *tsscommv1.PartyId) {
+	switch v := m.Payload.(type) {
+	case *tsscommv1.PropagatedMessage_Echo:
+		overwritePartyId(v.Echo.Echoer, clientId)
+	case *tsscommv1.PropagatedMessage_Unicast:
+		overwritePartyId(v.Unicast.Sender, clientId)
+	}
+}
+
+func overwritePartyId(curr *tsscommv1.PartyId, new *tsscommv1.PartyId) {
+	curr.Id = strings.Clone(new.Id)
+	curr.Key = make([]byte, len(new.Key))
+	copy(curr.Key, new.Key)
 }

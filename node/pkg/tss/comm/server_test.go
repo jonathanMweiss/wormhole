@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/supervisor"
+	"github.com/certusone/wormhole/node/pkg/tss"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -124,4 +126,65 @@ func TestRedial(t *testing.T) {
 		t.FailNow()
 	case <-tstServer.done:
 	}
+}
+
+func TestE2E(t *testing.T) {
+	a := require.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	ctx = testutils.MakeSupervisorContext(ctx)
+
+	engines, err := _loadGuardians(5)
+	a.NoError(err)
+
+	// create servers.
+	servers := make([]*server, 5)
+	for i := 0; i < 5; i++ {
+		servers[i] = NewServer(&Parameters{
+			SocketPath: fmt.Sprintf("localhost:%d", 5930+i),
+			Logger:     supervisor.Logger(ctx),
+			TssEngine:  engines[i],
+		}).(*server)
+		servers[i].ctx = ctx
+	}
+
+}
+
+// TODO: this is a copy-paste from tss/implementation_test.go
+func loadMockGuardianStorage(gstorageIndex int) (*tss.GuardianStorage, error) {
+	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	st, err := tss.NewGuardianStorageFromFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// TODO: this is a copy-paste from tss/implementation_test.go
+func _loadGuardians(numParticipants int) ([]*tss.Engine, error) {
+	engines := make([]*tss.Engine, numParticipants)
+
+	for i := 0; i < numParticipants; i++ {
+		gs, err := loadMockGuardianStorage(i)
+		if err != nil {
+			return nil, err
+		}
+
+		e, err := tss.NewReliableTSS(gs)
+		if err != nil {
+			return nil, err
+		}
+
+		en, ok := e.(*tss.Engine)
+		if !ok {
+			return nil, errors.New("not an engine")
+		}
+		engines[i] = en
+	}
+
+	return engines, nil
 }

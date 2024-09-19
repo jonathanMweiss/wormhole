@@ -2,6 +2,7 @@ package tss
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand"
@@ -32,19 +33,6 @@ var (
 
 	allRounds = append(unicastRounds, broadcastRounds...)
 )
-
-func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
-	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex)
-	if err != nil {
-		panic(err)
-	}
-
-	st, err := NewGuardianStorageFromFile(path)
-	if err != nil {
-		panic(err)
-	}
-	return st
-}
 
 func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *tsscommv1.Echo {
 	payload, _, err := parsed.WireBytes()
@@ -421,14 +409,40 @@ func generateFakeMessageWithRandomContent(from, to *tss.PartyID, rnd signingRoun
 	return tss.NewMessage(meta, content, tss.NewMessageWrapper(meta, content, trackingId.Bytes()...))
 }
 
-func loadGuardians(a *assert.Assertions) []*Engine {
-	engines := make([]*Engine, Participants)
-
-	for i := 0; i < Participants; i++ {
-		e, err := NewReliableTSS(loadMockGuardianStorage(i))
-		a.NoError(err)
-		engines[i] = e.(*Engine)
+func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
+	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex)
+	if err != nil {
+		panic(err)
 	}
+
+	st, err := NewGuardianStorageFromFile(path)
+	if err != nil {
+		panic(err)
+	}
+	return st
+}
+
+func _loadGuardians(numParticipants int) ([]*Engine, error) {
+	engines := make([]*Engine, numParticipants)
+
+	for i := 0; i < numParticipants; i++ {
+		e, err := NewReliableTSS(loadMockGuardianStorage(i))
+		if err != nil {
+			return nil, err
+		}
+		en, ok := e.(*Engine)
+		if !ok {
+			return nil, errors.New("not an engine")
+		}
+		engines[i] = en
+	}
+
+	return engines, nil
+}
+
+func loadGuardians(a *assert.Assertions) []*Engine {
+	engines, err := _loadGuardians(Participants)
+	a.NoError(err)
 
 	return engines
 }

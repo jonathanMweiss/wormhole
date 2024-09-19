@@ -2,7 +2,6 @@ package comm
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 
@@ -18,29 +17,25 @@ type DirectLink interface {
 	Run(context.Context) error
 }
 
-type Parameters struct {
-	SocketPath      string
-	SelfCredentials tls.Certificate
+func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableMessenger) DirectLink {
 
-	Logger    *zap.Logger
-	TssEngine tss.ReliableMessageHandler
+	peers := tssMessenger.GetPeers()
+	partyIds := make([]*tsscommv1.PartyId, len(peers))
+	for i, peer := range peers {
+		partyIds[i] = tssMessenger.FetchPartyId(peer)
+	}
 
-	// PartyId.ID  == hostname.
-	// partyId.Key == self signed certificate.
-	// Moniker can be anything.
-	// Index doesn't matter for this service.
-	Peers []*tsscommv1.PartyId
-}
-
-func NewServer(params *Parameters) DirectLink {
 	return &server{
 		UnimplementedDirectLinkServer: tsscommv1.UnimplementedDirectLinkServer{},
 		ctx:                           nil, // set up in Run(ctx)
+		logger:                        logger,
+		socketPath:                    socketPath,
 
-		params:      params,
-		connections: make(map[string]*connection, len(params.Peers)),
+		tssMessenger: tssMessenger,
 
-		requestRedial: make(chan string, len(params.Peers)),
+		peers:         partyIds,
+		connections:   make(map[string]*connection, len(peers)),
+		requestRedial: make(chan string, len(peers)),
 		redials:       make(chan redialResponse, 1),
 	}
 }
@@ -54,7 +49,7 @@ func (s *server) Run(ctx context.Context) error {
 
 	s.ctx = ctx
 
-	listener, err := net.Listen("tcp", s.params.SocketPath)
+	listener, err := net.Listen("tcp", s.socketPath)
 	if err != nil {
 		return err
 	}
@@ -72,7 +67,7 @@ func (s *server) Run(ctx context.Context) error {
 	}()
 	s.run()
 
-	s.params.Logger.Info("admin server listening on", zap.String("path", s.params.SocketPath))
+	s.logger.Info("admin server listening on", zap.String("path", s.socketPath))
 
 	select {
 	case <-ctx.Done():

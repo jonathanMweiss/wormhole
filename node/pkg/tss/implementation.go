@@ -1,6 +1,7 @@
 package tss
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
@@ -12,6 +13,7 @@ import (
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/supervisor"
+	"github.com/certusone/wormhole/node/pkg/tss/internal"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/yossigi/tss-lib/v2/common"
@@ -22,8 +24,6 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
-
-type symKey []byte
 
 // Engine is the implementation of reliableTSS, it is a wrapper for the tss-lib fullParty and adds reliable broadcast logic
 // to the message sending and receiving.
@@ -112,7 +112,18 @@ func (t *Engine) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
 
 // FetchPartyId implements ReliableTSS.
 func (t *Engine) FetchPartyId(*ecdsa.PublicKey) *tsscommv1.PartyId {
-	panic("FetchPartyId Not implemented yet.")
+	pemkey, err := internal.PublicKeyToPem(t.GetPublicKey())
+	if err != nil {
+		return nil
+	}
+
+	for _, pid := range t.GuardianStorage.Guardians {
+		if bytes.Equal(pid.Key, pemkey) {
+			return partyIdToProto(pid)
+		}
+	}
+
+	return nil
 }
 
 // BeginAsyncThresholdSigningProtocol used to start the TSS protocol over a specific msg.
