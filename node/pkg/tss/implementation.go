@@ -57,12 +57,11 @@ type PEM []byte
 type GuardianStorage struct {
 	Self *tss.PartyID
 
-	// SecretKey is the marshaled secret key of ReliableTSS, used to genereate SymKeys and signingKey.
-	SecretKey []byte
 	// should be a certificate generated with SecretKey
-	TlsX509       PEM
-	TlsPrivateKey PEM
-	tlsCert       *tls.Certificate
+	TlsX509    PEM
+	PrivateKey PEM
+	tlsCert    *tls.Certificate
+	signingKey *ecdsa.PrivateKey // should be the unmarshalled value of PriavteKey.
 
 	// Stored sorted by Key. include Self.
 	Guardians []*tss.PartyID
@@ -78,8 +77,6 @@ type GuardianStorage struct {
 	SavedSecretParameters *keygen.LocalPartySaveData
 
 	LoadDistributionKey []byte
-
-	signingKey *ecdsa.PrivateKey // should be the unmarshalled value of signing key.
 }
 
 func (g *GuardianStorage) contains(pid *tss.PartyID) bool {

@@ -2,6 +2,7 @@ package tss
 
 import (
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -24,7 +25,6 @@ const (
 )
 
 type dkgSetupPlayer struct {
-	SecretKey []byte
 	secretKey *ecdsa.PrivateKey
 	*tss.PartyID
 
@@ -57,31 +57,8 @@ func TestGuardianStorageUnmarshal(t *testing.T) {
 	}
 }
 
-func TestMarshalSecretKey(t *testing.T) {
-	a := assert.New(t)
-	sk, err := ecdsa.GenerateKey(tss.S256(), rand.Reader)
-	a.NoError(err)
-
-	bz := marshalEcdsaSecretkey(sk)
-	unmarshaled := unmarshalEcdsaSecretKey(bz)
-	a.True(sk.PublicKey.Equal(&unmarshaled.PublicKey))
-	a.Equal(sk.D, unmarshaled.D)
-}
-
-func TestMarshalPK(t *testing.T) {
-	a := assert.New(t)
-	sk, err := ecdsa.GenerateKey(tss.S256(), rand.Reader)
-	a.NoError(err)
-
-	bz, _ := marshalEcdsaPublickey(&sk.PublicKey)
-	unmarshaled, err := unmarshalEcdsaPublickey(tss.S256(), bz)
-	a.NoError(err)
-
-	a.True(sk.PublicKey.Equal(unmarshaled))
-}
-
 func TestSetUpGroup(t *testing.T) {
-	// t.SkipNow() // manual test only.
+	t.SkipNow() // manual test only.
 	a := assert.New(t)
 
 	all := setupPlayers(a)
@@ -189,7 +166,7 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 	partyIDS := make(tss.UnSortedPartyIDs, Participants)
 	for i := 0; i < Participants; i++ {
 		pnm := strconv.Itoa(i)
-		pk, err := marshalEcdsaPublickey(&orderedKeysByPublicKey[i].PublicKey)
+		pk, err := internal.PublicKeyToPem(&orderedKeysByPublicKey[i].PublicKey)
 		if err != nil {
 			panic(err)
 		}
@@ -203,7 +180,6 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 		}
 
 		all[i] = &dkgSetupPlayer{
-			SecretKey:      marshalEcdsaSecretkey(orderedKeysByPublicKey[i]),
 			secretKey:      orderedKeysByPublicKey[i],
 			PartyID:        partyIDS[i],
 			PeerContext:    nil, // known only all player IDs are known.
@@ -231,12 +207,12 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 		player.Parameters = tss.NewParameters(tss.S256(), player.PeerContext, player.PartyID, Participants, Threshold)
 		player.IdToPIDmapping = IdToPIDmapping
 
-		x509, privateKey := internal.NewTLSCredentials()
+		x509 := internal.NewTLSCredentials(player.secretKey)
 		x509Certs[i] = internal.CertToPem(x509)
 
 		player.peerCerts = x509Certs
 		player.tlsPEM = internal.CertToPem(x509)
-		player.tlsPrivateKey = internal.KeyToPem(privateKey)
+		player.tlsPrivateKey = internal.PrivateKeyToPem(player.secretKey)
 
 		tmp := make([]byte, 32)
 		copy(tmp, loadBalancingKey)
@@ -250,16 +226,16 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 func getOrderedKeys(a *assert.Assertions) []*ecdsa.PrivateKey {
 	orderedKeysByPublicKey := make([]*ecdsa.PrivateKey, Participants)
 	for i := range orderedKeysByPublicKey {
-		sk, err := ecdsa.GenerateKey(tss.S256(), rand.Reader)
+		sk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		a.NoError(err)
 
 		orderedKeysByPublicKey[i] = sk
 
 	}
 	sort.Slice(orderedKeysByPublicKey, func(i, j int) bool {
-		pk1, err := marshalEcdsaPublickey(&orderedKeysByPublicKey[i].PublicKey)
+		pk1, err := internal.PublicKeyToPem(&orderedKeysByPublicKey[i].PublicKey)
 		a.NoError(err)
-		pk2, err := marshalEcdsaPublickey(&orderedKeysByPublicKey[j].PublicKey)
+		pk2, err := internal.PublicKeyToPem(&orderedKeysByPublicKey[j].PublicKey)
 		a.NoError(err)
 
 		ibts := string(pk1)
@@ -285,13 +261,12 @@ func (player *dkgSetupPlayer) handleKeygenEndMessage(m *keygen.LocalPartySaveDat
 	}
 
 	guardians[i] = &GuardianStorage{
-		Self:      player.PartyID,
-		SecretKey: player.SecretKey,
+		Self: player.PartyID,
 
 		Guardians: player.PeerContext.IDs(),
 
-		TlsX509:       player.tlsPEM,
-		TlsPrivateKey: player.tlsPrivateKey,
+		TlsX509:    player.tlsPEM,
+		PrivateKey: player.tlsPrivateKey,
 
 		GuardianCerts: player.peerCerts,
 

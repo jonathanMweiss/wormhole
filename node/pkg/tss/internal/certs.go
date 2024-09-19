@@ -2,12 +2,12 @@ package internal
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log"
 	"math/big"
 	"time"
@@ -53,11 +53,8 @@ func CreateCert(template, parent *x509.Certificate, pub *ecdsa.PublicKey, parent
 }
 
 // NewTLSCredentials creates a self signed certificate
-func NewTLSCredentials() (*x509.Certificate, *ecdsa.PrivateKey) {
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatal("couldn't create private key: %v", err)
-	}
+func NewTLSCredentials(rootKey *ecdsa.PrivateKey) *x509.Certificate {
+
 	rootCertTmpl, err := CertTemplate()
 	if err != nil {
 		log.Fatalf("creating cert template: %v", err)
@@ -74,32 +71,72 @@ func NewTLSCredentials() (*x509.Certificate, *ecdsa.PrivateKey) {
 		log.Fatalf("error creating cert: %v", err)
 	}
 
-	// keyBytes, err := x509.MarshalPKCS8PrivateKey(rootKey)
-	// if err != nil {
-	// 	log.Fatal("shouldn't happen")
-	// }
-
-	// servKeyPEM := pem.EncodeToMemory(&pem.Block{
-	// 	Type: "RSA PRIVATE KEY", Bytes: keyBytes,
-	// })
-
-	// rootTlsCert, err := tls.X509KeyPair(rootPem, servKeyPEM)
-	// if err != nil {
-	// 	log.Fatalf("invalid key pair: %v", err)
-	// }
-
-	return rootCert, rootKey
+	return rootCert
 }
 
-func KeyToPem(pkey *ecdsa.PrivateKey) []byte {
+func PrivateKeyToPem(pkey *ecdsa.PrivateKey) []byte {
 	keyBytes, err := x509.MarshalPKCS8PrivateKey(pkey)
 	if err != nil {
 		log.Fatal("shouldn't happen")
 	}
 
 	return pem.EncodeToMemory(&pem.Block{
-		Type: "RSA PRIVATE KEY", Bytes: keyBytes,
+		Type: "PRIVATE KEY", Bytes: keyBytes,
 	})
+}
+
+func PublicKeyToPem(pkey *ecdsa.PublicKey) ([]byte, error) {
+	keyBytes, err := x509.MarshalPKIXPublicKey(pkey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal public key: %w", err)
+	}
+
+	return pem.EncodeToMemory(&pem.Block{
+		Type: "PUBLIC KEY", Bytes: keyBytes,
+	}), nil
+}
+
+func PemToPublicKey(pemBytes []byte) (*ecdsa.PublicKey, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, errors.New("failed to decode PEM block containing the public key")
+	}
+	if block.Type != "PUBLIC KEY" {
+		return nil, errors.New("PEM block is not a public key")
+	}
+
+	k, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+
+	publicKey, ok := k.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("parsed public key is not an ECDSA key")
+	}
+
+	return publicKey, nil
+}
+func PemToPrivateKey(pemBytes []byte) (*ecdsa.PrivateKey, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, errors.New("failed to decode PEM block containing the private key")
+	}
+	if block.Type != "PRIVATE KEY" {
+		return nil, errors.New("PEM block is not a private key")
+	}
+
+	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse private key: %v", err)
+	}
+
+	privateKey, ok := k.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("parsed private key is not an ECDSA key")
+	}
+
+	return privateKey, nil
 }
 
 func CertToPem(cert *x509.Certificate) []byte {
