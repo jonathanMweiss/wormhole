@@ -2,6 +2,7 @@ package comm
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"io"
 	"strings"
@@ -13,7 +14,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -36,7 +36,8 @@ type server struct {
 
 	tssMessenger tss.ReliableMessenger
 
-	peers []*tsscommv1.PartyId
+	peers      []*tsscommv1.PartyId
+	peerToCert map[string]*x509.Certificate
 	// to ensure thread-safety without locks, only the sender is allowed to change this map.
 	connections   map[string]*connection
 	requestRedial chan string
@@ -162,7 +163,15 @@ func (s *server) dailer() {
 			return
 
 		case hostname := <-s.requestRedial:
-			cc, err := grpc.Dial(hostname, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			pool := x509.NewCertPool()
+			pool.AddCert(s.peerToCert[hostname]) // dialing to peer and accepting his cert only.
+
+			cc, err := grpc.Dial(hostname,
+				grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+					Certificates: []tls.Certificate{*s.tssMessenger.GetCertificate()}, // our cert to be sent to the peer.
+					RootCAs:      pool,
+				})),
+			)
 			if err != nil {
 				s.logger.Error(
 					"direct connection to peer failed",

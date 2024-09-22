@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net"
 	"time"
 )
 
@@ -29,6 +30,10 @@ func CertTemplate() (*x509.Certificate, error) {
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(time.Hour * 24 * 366 * 40), // valid for > 40 years
 		BasicConstraintsValid: true,
+
+		//TODO: Ask Yossi if this is okay to be hardcoded, no one can contact someone as localhost in a real scenario...
+		DNSNames:    []string{"localhost"},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
 	}
 	return &tmpl, nil
 }

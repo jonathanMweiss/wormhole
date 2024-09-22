@@ -2,6 +2,8 @@ package comm
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/certusone/wormhole/node/pkg/tss"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 type DirectLink interface {
@@ -21,8 +24,10 @@ func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableM
 
 	peers := tssMessenger.GetPeers()
 	partyIds := make([]*tsscommv1.PartyId, len(peers))
+	peerToCert := make(map[string]*x509.Certificate, len(peers))
 	for i, peer := range peers {
 		partyIds[i] = tssMessenger.FetchPartyId(peer)
+		peerToCert[partyIds[i].Id] = peer
 	}
 
 	return &server{
@@ -34,6 +39,7 @@ func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableM
 		tssMessenger: tssMessenger,
 
 		peers:         partyIds,
+		peerToCert:    peerToCert,
 		connections:   make(map[string]*connection, len(peers)),
 		requestRedial: make(chan string, len(peers)),
 		redials:       make(chan redialResponse, 1),
@@ -56,8 +62,7 @@ func (s *server) Run(ctx context.Context) error {
 
 	errC := make(chan error)
 	gserver := grpc.NewServer(
-	// TODO set credentials
-	// TODO: set CA as pool of certs of the guardians. each guardian is its own CA, and we know all of them.
+		s.makeServerCredentials(),
 	)
 
 	tsscommv1.RegisterDirectLinkServer(gserver, s)
@@ -80,4 +85,26 @@ func (s *server) Run(ctx context.Context) error {
 	listener.Close()
 
 	return err
+}
+
+// root CAs are the certificates of all peers.
+func (s *server) getRootCAs() *x509.CertPool {
+	certPool := x509.NewCertPool()
+	for _, peer := range s.tssMessenger.GetPeers() {
+		certPool.AddCert(peer)
+	}
+
+	return certPool
+}
+func (s *server) makeServerCredentials() grpc.ServerOption {
+	certPool := s.getRootCAs()
+	creds := grpc.Creds(credentials.NewTLS(
+		&tls.Config{
+			Certificates: []tls.Certificate{*s.tssMessenger.GetCertificate()},
+			RootCAs:      certPool, // treating each peer as its own CA, will use the given cert as the ID of the peer.
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			ClientCAs:    certPool,
+		},
+	))
+	return creds
 }

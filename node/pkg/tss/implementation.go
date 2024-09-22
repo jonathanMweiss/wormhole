@@ -111,7 +111,7 @@ func (t *Engine) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
 }
 
 // FetchPartyId implements ReliableTSS.
-func (t *Engine) FetchPartyId(*ecdsa.PublicKey) *tsscommv1.PartyId {
+func (t *Engine) FetchPartyId(*x509.Certificate) *tsscommv1.PartyId {
 	pemkey, err := internal.PublicKeyToPem(t.GetPublicKey())
 	if err != nil {
 		return nil
@@ -124,6 +124,16 @@ func (t *Engine) FetchPartyId(*ecdsa.PublicKey) *tsscommv1.PartyId {
 	}
 
 	return nil
+}
+
+// GetCertificate implements ReliableTSS.
+func (st *GuardianStorage) GetCertificate() *tls.Certificate {
+	return st.tlsCert
+}
+
+// GetPeers implements ReliableTSS.
+func (st *GuardianStorage) GetPeers() []*x509.Certificate {
+	return st.guardiansCerts
 }
 
 // BeginAsyncThresholdSigningProtocol used to start the TSS protocol over a specific msg.
