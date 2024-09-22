@@ -13,10 +13,7 @@ import (
 	"github.com/certusone/wormhole/node/pkg/tss"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/peer"
-	"google.golang.org/grpc/status"
 )
 
 type connection struct {
@@ -47,12 +44,11 @@ type server struct {
 
 func (s *server) run() {
 	go s.dailer()
+	go s.sender()
 
 	for _, pid := range s.peers {
 		s.enqueueRedialRequest(pid.Id)
 	}
-
-	go s.sender()
 }
 
 func (s *server) sender() {
@@ -157,85 +153,73 @@ func (s *server) enqueueRedialRequest(hostname string) {
 }
 
 func (s *server) dailer() {
+	waiters := newBackoffHeap()
+
 	for {
 		time.Sleep(time.Millisecond * 100)
+		var dialTo string
 		select {
 		case <-s.ctx.Done():
 			return
-
-		case hostname := <-s.requestRedial:
-			pool := x509.NewCertPool()
-			pool.AddCert(s.peerToCert[hostname]) // dialing to peer and accepting his cert only.
-
-			cc, err := grpc.Dial(hostname,
-				grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-					Certificates: []tls.Certificate{*s.tssMessenger.GetCertificate()}, // our cert to be sent to the peer.
-					RootCAs:      pool,
-				})),
-			)
-			if err != nil {
-				s.logger.Error(
-					"direct connection to peer failed",
-					zap.Error(err),
-					zap.String("hostname", hostname),
-				)
-
-				s.enqueueRedialRequest(hostname)
-				time.Sleep(time.Millisecond * 10)
-
-				continue
-			}
-
-			stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
-			if err != nil {
-				cc.Close()
-
-				s.logger.Error(
-					"setting direct stream to peer failed",
-					zap.Error(err),
-					zap.String("hostname", hostname),
-				)
-
-				s.enqueueRedialRequest(hostname)
-				time.Sleep(time.Millisecond * 10)
-
-				continue
-			}
-
-			s.redials <- redialResponse{
-				name: hostname,
-				conn: &connection{
-					cc:     cc,
-					stream: stream,
-				},
-			}
+		case <-waiters.timer.C:
+			dialTo = waiters.Dequeue()
+		case dialTo = <-s.requestRedial:
 		}
+
+		if dialTo == "" {
+			continue
+		}
+
+		err := s.dial(dialTo)
+		if err == nil {
+			s.logger.Info("dialed to peer", zap.String("hostname", dialTo))
+			waiters.ResetAttempts(dialTo)
+			continue
+		}
+
+		s.logger.Error(
+			"failed to dial to peer",
+			zap.Error(err),
+			zap.String("hostname", dialTo),
+		)
+
+		// retry dialing
+		waiters.Enqueue(dialTo)
+		d := waiters.Peek()
+		s.logger.Info("will redial to peer in", zap.String("hostname", d.hostname), zap.Duration("duration", d.nextRedialTime.Sub(time.Now())))
 	}
 }
 
-func extractClientCert(ctx context.Context) (*x509.Certificate, error) {
-	p, ok := peer.FromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "unable to retrieve peer from context")
+func (s *server) dial(hostname string) error {
+	pool := x509.NewCertPool()
+	pool.AddCert(s.peerToCert[hostname]) // dialing to peer and accepting his cert only.
+
+	cc, err := grpc.Dial(hostname,
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			Certificates: []tls.Certificate{*s.tssMessenger.GetCertificate()}, // our cert to be sent to the peer.
+			RootCAs:      pool,
+		})),
+	)
+
+	if err != nil {
+		return err
 	}
 
-	// Extract AuthInfo (TLS information)
-	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
-	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "unexpected peer transport credentials type, please use tls")
+	stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
+	if err != nil {
+		cc.Close()
+		return err
 	}
 
-	// Get the client certificate
-	if len(tlsInfo.State.PeerCertificates) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "no client certificate provided")
+	s.redials <- redialResponse{
+		name: hostname,
+		conn: &connection{
+			cc:     cc,
+			stream: stream,
+		},
 	}
 
-	clientCert := tlsInfo.State.PeerCertificates[0]
-	if clientCert.PublicKeyAlgorithm != x509.ECDSA {
-		return nil, status.Error(codes.InvalidArgument, "certificate must use ECDSA")
-	}
-
-	return clientCert, nil
+	return nil
 }
 
 func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
@@ -251,29 +235,32 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 
 	clientId, err := s.tssMessenger.FetchPartyId(cert)
 	if err != nil {
-		return fmt.Errorf("unrecognized client certificate: %w", err)
+		return fmt.Errorf("unrecognized client: %w", err)
 	}
 
 	// TODO: Ensure that only a single Send() is called at most once by each peer.
 	for {
-		// TODO: ensure we don't need to check the ctx of the server.
-		//       (im pretty sure the grpcserver closes all incoming streams)
 		m, err := inStream.Recv()
 		if err != nil {
 			if err == io.EOF {
-				s.logger.Info("closing input stream")
-				// TODO: State the client disconnected.
+				s.logger.Info(
+					"closing input stream",
+					zap.String("peer", clientId.Id),
+				)
+
 				return nil
 			}
 
-			// TODO add identifier of the guardian.
-			s.logger.Error("error receiving from guardian. Closing connection", zap.Error(err))
+			s.logger.Error(
+				"error receiving from guardian. Closing connection",
+				zap.Error(err),
+				zap.String("peer", clientId.Id),
+			)
 			return err
 		}
 
 		// (SECURITY measure): ensuring received message has the ID of the correct sender.
 		overwriteSenderID(m, clientId)
-
 		s.tssMessenger.HandleIncomingTssMessage(m)
 	}
 }

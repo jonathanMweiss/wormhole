@@ -759,6 +759,8 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, inf
 		}
 		logger.Info("All Guardians have received at least one heartbeat.")
 
+		time.Sleep(time.Second * 3) // adding wait to ensure all guardians have direct connections for TSS.
+
 		// have them make observations
 		for _, testCase := range testCases {
 			select {
