@@ -20,13 +20,17 @@ type DirectLink interface {
 	Run(context.Context) error
 }
 
-func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableMessenger) DirectLink {
+func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableMessenger) (DirectLink, error) {
 
 	peers := tssMessenger.GetPeers()
 	partyIds := make([]*tsscommv1.PartyId, len(peers))
 	peerToCert := make(map[string]*x509.Certificate, len(peers))
+	var err error
 	for i, peer := range peers {
-		partyIds[i] = tssMessenger.FetchPartyId(peer)
+		partyIds[i], err = tssMessenger.FetchPartyId(peer)
+		if err != nil {
+			return nil, err
+		}
 		peerToCert[partyIds[i].Id] = peer
 	}
 
@@ -43,7 +47,7 @@ func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableM
 		connections:   make(map[string]*connection, len(peers)),
 		requestRedial: make(chan string, len(peers)),
 		redials:       make(chan redialResponse, 1),
-	}
+	}, nil
 }
 
 // Run initialise the server and starts listening on the socket.

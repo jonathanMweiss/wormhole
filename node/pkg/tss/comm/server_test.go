@@ -30,9 +30,11 @@ type mockTssMessageHandler struct {
 	peerId           *tsscommv1.PartyId
 }
 
-func (m *mockTssMessageHandler) GetCertificate() *tls.Certificate                  { return m.selfCert }
-func (m *mockTssMessageHandler) GetPeers() []*x509.Certificate                     { return m.peersToConnectTo }
-func (m *mockTssMessageHandler) FetchPartyId(*x509.Certificate) *tsscommv1.PartyId { return m.peerId }
+func (m *mockTssMessageHandler) GetCertificate() *tls.Certificate { return m.selfCert }
+func (m *mockTssMessageHandler) GetPeers() []*x509.Certificate    { return m.peersToConnectTo }
+func (m *mockTssMessageHandler) FetchPartyId(*x509.Certificate) (*tsscommv1.PartyId, error) {
+	return m.peerId, nil
+}
 func (m *mockTssMessageHandler) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
 	return m.chn
 }
@@ -55,7 +57,7 @@ func (w *testServer) Send(in tsscommv1.DirectLink_SendServer) error {
 	return io.EOF
 }
 
-func TestRedial(t *testing.T) {
+func TestTLSConnectAndRedial(t *testing.T) {
 	a := require.New(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
@@ -64,13 +66,15 @@ func TestRedial(t *testing.T) {
 	en, err := _loadGuardians(2)
 	a.NoError(err)
 
-	tmpSrvr := NewServer(workingServerSock, supervisor.Logger(ctx), &mockTssMessageHandler{
+	tmpSrvr, err := NewServer(workingServerSock, supervisor.Logger(ctx), &mockTssMessageHandler{
 		chn:      nil,
 		selfCert: en[0].GetCertificate(),
 		// connect to no one.
 		peersToConnectTo: en[0].GetPeers(), // Give the peer a certificate.
 		peerId:           &tsscommv1.PartyId{},
 	})
+	a.NoError(err)
+
 	tstServer := testServer{
 		server: tmpSrvr.(*server),
 		Uint32: atomic.Uint32{},
@@ -98,7 +102,7 @@ func TestRedial(t *testing.T) {
 	a.NoError(err)
 
 	msgChan := make(chan *tsscommv1.PropagatedMessage)
-	srvr := NewServer("localhost:5930", supervisor.Logger(ctx), &mockTssMessageHandler{
+	srvr, err := NewServer("localhost:5930", supervisor.Logger(ctx), &mockTssMessageHandler{
 		chn:              msgChan,
 		selfCert:         en[1].GetCertificate(),
 		peersToConnectTo: []*x509.Certificate{serverCert}, // will ask to fetch each peer (and return the below peerId)
@@ -106,6 +110,7 @@ func TestRedial(t *testing.T) {
 			Id: workingServerSock,
 		},
 	})
+	a.NoError(err)
 
 	srv := srvr.(*server)
 	srv.ctx = ctx
@@ -134,28 +139,6 @@ func TestRedial(t *testing.T) {
 		t.FailNow()
 	case <-tstServer.done:
 	}
-}
-
-func TestE2E(t *testing.T) {
-	// a := require.New(t)
-	// ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	// defer cancel()
-	// ctx = testutils.MakeSupervisorContext(ctx)
-
-	// engines, err := _loadGuardians(5)
-	// a.NoError(err)
-
-	// // create servers.
-	// servers := make([]*server, 5)
-	// for i := 0; i < 5; i++ {
-	// 	servers[i] = NewServer(&Parameters{
-	// 		SocketPath: fmt.Sprintf("localhost:%d", 5930+i),
-	// 		Logger:     supervisor.Logger(ctx),
-	// 		TssEngine:  engines[i],
-	// 	}).(*server)
-	// 	servers[i].ctx = ctx
-	// }
-
 }
 
 // TODO: this is a copy-paste from tss/implementation_test.go

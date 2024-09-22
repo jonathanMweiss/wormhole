@@ -110,20 +110,38 @@ func (t *Engine) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
 	return t.messageOutChan
 }
 
-// FetchPartyId implements ReliableTSS.
-func (t *Engine) FetchPartyId(*x509.Certificate) *tsscommv1.PartyId {
-	pemkey, err := internal.PublicKeyToPem(t.GetPublicKey())
-	if err != nil {
-		return nil
-	}
-
-	for _, pid := range t.GuardianStorage.Guardians {
-		if bytes.Equal(pid.Key, pemkey) {
+func (st *GuardianStorage) fetchPartyIdFromBytes(pk []byte) *tsscommv1.PartyId {
+	for _, pid := range st.Guardians {
+		if bytes.Equal(pid.Key, pk) {
 			return partyIdToProto(pid)
 		}
 	}
 
 	return nil
+}
+
+// FetchPartyId implements ReliableTSS.
+func (st *GuardianStorage) FetchPartyId(cert *x509.Certificate) (*tsscommv1.PartyId, error) {
+
+	var pid *tsscommv1.PartyId
+	switch v := cert.PublicKey.(type) {
+	case *ecdsa.PublicKey:
+		pem, err := internal.PublicKeyToPem(v)
+		if err != nil {
+			return nil, err
+		}
+		pid = st.fetchPartyIdFromBytes(pem)
+	case []byte:
+		pid = st.fetchPartyIdFromBytes(v)
+	default:
+		return nil, fmt.Errorf("unsupported public key type")
+	}
+
+	if pid == nil {
+		return nil, fmt.Errorf("certificate owner is unknown")
+	}
+
+	return pid, nil
 }
 
 // GetCertificate implements ReliableTSS.

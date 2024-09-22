@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -248,7 +249,10 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 		return err
 	}
 
-	clientId := s.tssMessenger.FetchPartyId(cert)
+	clientId, err := s.tssMessenger.FetchPartyId(cert)
+	if err != nil {
+		return fmt.Errorf("unrecognized client certificate: %w", err)
+	}
 
 	// TODO: Ensure that only a single Send() is called at most once by each peer.
 	for {

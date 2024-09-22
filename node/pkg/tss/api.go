@@ -21,7 +21,7 @@ type ReliableMessenger interface {
 	// Utilities for servers:
 	GetCertificate() *tls.Certificate // containing secret key.
 	GetPeers() []*x509.Certificate    // containing public keys.
-	FetchPartyId(*x509.Certificate) *tsscommv1.PartyId
+	FetchPartyId(cert *x509.Certificate) (*tsscommv1.PartyId, error)
 }
 
 // Signer is the interface to give any component with the ability to authorise a new threshold signature over a message.
