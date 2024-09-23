@@ -17,7 +17,7 @@ import (
 type DirectLink interface {
 	tsscommv1.DirectLinkServer
 
-	Run(context.Context) error
+	Run(ctx context.Context) error
 }
 
 func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableMessenger) (DirectLink, error) {
@@ -25,12 +25,14 @@ func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableM
 	peers := tssMessenger.GetPeers()
 	partyIds := make([]*tsscommv1.PartyId, len(peers))
 	peerToCert := make(map[string]*x509.Certificate, len(peers))
+
 	var err error
 	for i, peer := range peers {
 		partyIds[i], err = tssMessenger.FetchPartyId(peer)
 		if err != nil {
 			return nil, err
 		}
+
 		peerToCert[partyIds[i].Id] = peer
 	}
 
@@ -76,7 +78,7 @@ func (s *server) Run(ctx context.Context) error {
 	}()
 	s.run()
 
-	s.logger.Info("admin server listening on", zap.String("path", s.socketPath))
+	s.logger.Info("tsscomm.server listening on", zap.String("path", s.socketPath))
 
 	select {
 	case <-ctx.Done():
@@ -91,24 +93,21 @@ func (s *server) Run(ctx context.Context) error {
 	return err
 }
 
-// root CAs are the certificates of all peers.
-func (s *server) getRootCAs() *x509.CertPool {
+func (s *server) makeServerCredentials() grpc.ServerOption {
 	certPool := x509.NewCertPool()
 	for _, peer := range s.tssMessenger.GetPeers() {
 		certPool.AddCert(peer)
 	}
 
-	return certPool
-}
-func (s *server) makeServerCredentials() grpc.ServerOption {
-	certPool := s.getRootCAs()
 	creds := grpc.Creds(credentials.NewTLS(
 		&tls.Config{
+			MinVersion:   tls.VersionTLS13, // version 1.3
 			Certificates: []tls.Certificate{*s.tssMessenger.GetCertificate()},
 			RootCAs:      certPool, // treating each peer as its own CA, will use the given cert as the ID of the peer.
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 			ClientCAs:    certPool,
 		},
 	))
+
 	return creds
 }

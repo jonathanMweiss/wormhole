@@ -16,6 +16,8 @@ const maxAttempts = 10 // max backoff attempts before time doesn't increase.
 const minBackoffTime = time.Millisecond * 100
 const maxBackoffTime = minBackoffTime * 1024
 
+const connectionCheckTime = time.Second * 5
+
 type dialWithBackoff struct {
 	hostname       string
 	attempt        uint64
@@ -41,7 +43,9 @@ func (d *backoffHeap) Enqueue(hostname string) {
 		if newv >= maxAttempts {
 			newv = maxAttempts
 		}
+
 		d.attemptsPerPeer[hostname] = newv
+
 	} else {
 		d.attemptsPerPeer[hostname] = 0
 	}
@@ -63,10 +67,15 @@ func (d *backoffHeap) Dequeue() string {
 		return ""
 	}
 
-	elem := heap.Pop(d).(dialWithBackoff)
+	elem, ok := heap.Pop(d).(dialWithBackoff)
+	if !ok {
+		return "" // shouldn't happen.
+	}
+
 	d.alreadyInHeap[elem.hostname] = false
 
 	d.setTopAsTimer()
+
 	return elem.hostname
 }
 
@@ -77,8 +86,10 @@ func (d *backoffHeap) ResetAttempts(hostname string) {
 func (d *backoffHeap) setTopAsTimer() {
 	if len(d.heap) == 0 {
 		d.stopAndDrainTimer() // no elements: stop the timer.
+
 		return
 	}
+
 	endTime := d.peek().nextRedialTime // we have at least one element.
 
 	d.stopAndDrainTimer()
@@ -150,9 +161,10 @@ func (d *backoffHeap) Swap(i int, j int) {
 	d.heap[i], d.heap[j] = d.heap[j], d.heap[i]
 }
 func (d *backoffHeap) Push(x any) {
-	d.heap = append(d.heap, x.(dialWithBackoff))
+	if v, ok := x.(dialWithBackoff); ok {
+		d.heap = append(d.heap, v)
+	}
 }
-
 func (d *backoffHeap) peek() *dialWithBackoff {
 	if len(d.heap) == 0 {
 		return nil

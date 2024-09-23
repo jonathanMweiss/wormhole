@@ -52,13 +52,15 @@ func (s *server) run() {
 }
 
 func (s *server) sender() {
-	connectionCheckTicker := time.NewTicker(time.Second * 5)
+	connectionCheckTicker := time.NewTicker(connectionCheckTime)
+
 	for {
 		select {
 		case <-s.ctx.Done():
 			for _, con := range s.connections {
 				con.cc.Close()
 			}
+
 			return
 
 		case o := <-s.tssMessenger.ProducedOutputMessages():
@@ -67,8 +69,10 @@ func (s *server) sender() {
 		case redial := <-s.redials:
 			if _, ok := s.connections[redial.name]; ok {
 				redial.conn.cc.Close() // shouldn't open the same connection twice.
+
 				continue
 			}
+
 			s.connections[redial.name] = redial.conn
 
 		case <-connectionCheckTicker.C:
@@ -107,6 +111,7 @@ func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
 
 	for _, recipient := range m.Unicast.Recipients {
 		hostname := recipient.Id
+
 		conn, ok := s.connections[recipient.Id]
 		if !ok {
 			s.enqueueRedialRequest(hostname)
@@ -115,6 +120,7 @@ func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
 				"received unknown recipient",
 				zap.String("hostname", recipient.Id),
 			)
+
 			continue
 		}
 
@@ -152,6 +158,7 @@ func (s *server) enqueueRedialRequest(hostname string) {
 		return
 	case s.requestRedial <- hostname:
 		s.logger.Debug("requested redial", zap.String("hostname", hostname))
+
 		return
 	default:
 		s.logger.Warn("couldn't send request to redial", zap.String("hostname", hostname))
@@ -181,6 +188,7 @@ func (s *server) dailer() {
 				)
 
 				waiters.Enqueue(dialTo)
+
 				continue
 			}
 
@@ -199,6 +207,7 @@ func (s *server) dial(hostname string) error {
 
 	cc, err := grpc.Dial(hostname,
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			MinVersion:   tls.VersionTLS13,                                    // tls 1.3
 			Certificates: []tls.Certificate{*s.tssMessenger.GetCertificate()}, // our cert to be sent to the peer.
 			RootCAs:      pool,
 		})),
@@ -211,6 +220,7 @@ func (s *server) dial(hostname string) error {
 	stream, err := tsscommv1.NewDirectLinkClient(cc).Send(s.ctx)
 	if err != nil {
 		cc.Close()
+
 		return err
 	}
 
@@ -259,6 +269,7 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 				zap.Error(err),
 				zap.String("peer", clientId.Id),
 			)
+
 			return err
 		}
 
@@ -277,8 +288,8 @@ func overwriteSenderID(m *tsscommv1.PropagatedMessage, clientId *tsscommv1.Party
 	}
 }
 
-func overwritePartyId(curr *tsscommv1.PartyId, new *tsscommv1.PartyId) {
-	curr.Id = strings.Clone(new.Id)
-	curr.Key = make([]byte, len(new.Key))
-	copy(curr.Key, new.Key)
+func overwritePartyId(curr *tsscommv1.PartyId, overwritingId *tsscommv1.PartyId) {
+	curr.Id = strings.Clone(overwritingId.Id)
+	curr.Key = make([]byte, len(overwritingId.Key))
+	copy(curr.Key, overwritingId.Key)
 }
