@@ -29,20 +29,27 @@ type backoffHeap struct {
 	attemptsPerPeer map[string]uint64 // on successful dial, reset to 0.
 }
 
+// Enqueue adds a hostname to the heap, with a new backoff time.
 func (d *backoffHeap) Enqueue(hostname string) {
 	if d.alreadyInHeap[hostname] {
 		return
 	}
 
-	d.alreadyInHeap[hostname] = true
+	if v, ok := d.attemptsPerPeer[hostname]; ok {
+		d.attemptsPerPeer[hostname] = v + 1
+	} else {
+		d.attemptsPerPeer[hostname] = 0
+	}
+
 	elem := dialWithBackoff{
 		hostname: hostname,
-		attempt:  d.attemptsPerPeer[hostname], // 0 on first dial.
+		attempt:  d.attemptsPerPeer[hostname],
 	}
 
 	elem.setBackoff()
-
 	heap.Push(d, elem)
+	d.alreadyInHeap[hostname] = true
+
 	d.setTopAsTimer()
 }
 
@@ -52,7 +59,9 @@ func (d *backoffHeap) Dequeue() string {
 	}
 
 	elem := heap.Pop(d).(dialWithBackoff)
-	delete(d.alreadyInHeap, elem.hostname)
+	d.alreadyInHeap[elem.hostname] = false
+
+	d.setTopAsTimer()
 	return elem.hostname
 }
 
@@ -61,6 +70,11 @@ func (d *backoffHeap) ResetAttempts(hostname string) {
 }
 
 func (d *backoffHeap) setTopAsTimer() {
+	if len(d.heap) == 0 {
+		d.stopAndDrainTimer() // no elements: stop the timer.
+		return
+	}
+
 	endTime := d.Peek().nextRedialTime
 
 	d.stopAndDrainTimer()
@@ -81,11 +95,12 @@ func newBackoffHeap() backoffHeap {
 		attemptsPerPeer: map[string]uint64{},
 	}
 	heap.Init(&b)
+
+	b.stopAndDrainTimer() // ensuring it doesn't fire when empty.
 	return b
 }
 
 func (d *dialWithBackoff) setBackoff() {
-	d.attempt++
 	duration := minBackoffTime * (1 << uint(d.attempt))
 	if duration < minBackoffTime {
 		duration = minBackoffTime // ensuring overflow doesn't write minus duration.

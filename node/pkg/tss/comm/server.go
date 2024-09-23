@@ -63,6 +63,11 @@ func (s *server) sender() {
 			//TODO: Ensure malicious server can't block a broadcast.
 			s.send(o)
 		case redial := <-s.redials:
+			if _, ok := s.connections[redial.name]; ok {
+				redial.conn.cc.Close() // shouldn't open the same connection twice.
+				continue
+			}
+
 			s.connections[redial.name] = redial.conn
 
 		case <-connectionCheckTicker.C:
@@ -156,37 +161,32 @@ func (s *server) dailer() {
 	waiters := newBackoffHeap()
 
 	for {
-		time.Sleep(time.Millisecond * 100)
-		var dialTo string
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-waiters.timer.C:
-			dialTo = waiters.Dequeue()
-		case dialTo = <-s.requestRedial:
-		}
+			dialTo := waiters.Dequeue()
+			if dialTo == "" {
+				continue
+			}
 
-		if dialTo == "" {
-			continue
-		}
+			if err := s.dial(dialTo); err != nil {
+				s.logger.Error(
+					"couldn't create direct link to peer",
+					zap.Error(err),
+					zap.String("hostname", dialTo),
+				)
 
-		err := s.dial(dialTo)
-		if err == nil {
+				waiters.Enqueue(dialTo)
+				continue
+			}
+
 			s.logger.Info("dialed to peer", zap.String("hostname", dialTo))
 			waiters.ResetAttempts(dialTo)
-			continue
+
+		case dialTo := <-s.requestRedial:
+			waiters.Enqueue(dialTo)
 		}
-
-		s.logger.Error(
-			"failed to dial to peer",
-			zap.Error(err),
-			zap.String("hostname", dialTo),
-		)
-
-		// retry dialing
-		waiters.Enqueue(dialTo)
-		d := waiters.Peek()
-		s.logger.Info("will redial to peer in", zap.String("hostname", d.hostname), zap.Duration("duration", d.nextRedialTime.Sub(time.Now())))
 	}
 }
 
