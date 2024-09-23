@@ -212,7 +212,6 @@ func (s *server) dial(hostname string) error {
 			RootCAs:      pool,
 		})),
 	)
-
 	if err != nil {
 		return err
 	}
@@ -251,7 +250,6 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 		return fmt.Errorf("unrecognized client: %w", err)
 	}
 
-	// TODO: Ensure that only a single Send() is called at most once by each peer.
 	for {
 		m, err := inStream.Recv()
 		if err != nil {

@@ -21,7 +21,6 @@ type DirectLink interface {
 }
 
 func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableMessenger) (DirectLink, error) {
-
 	peers := tssMessenger.GetPeers()
 	partyIds := make([]*tsscommv1.PartyId, len(peers))
 	peerToCert := make(map[string]*x509.Certificate, len(peers))
@@ -87,8 +86,10 @@ func (s *server) Run(ctx context.Context) error {
 	}
 
 	gserver.Stop()
-	// TODO consider how to address this errors:
-	listener.Close()
+
+	if err := listener.Close(); err != nil {
+		s.logger.Error("failed to close listener", zap.Error(err))
+	}
 
 	return err
 }

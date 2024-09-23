@@ -12,11 +12,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const maxAttempts = 10 // max backoff attempts before time doesn't increase.
-const minBackoffTime = time.Millisecond * 100
-const maxBackoffTime = minBackoffTime * 1024
+const (
+	maxAttempts    = 10 // max backoff attempts before time doesn't increase.
+	minBackoffTime = time.Millisecond * 100
+	maxBackoffTime = minBackoffTime * 1024
 
-const connectionCheckTime = time.Second * 5
+	connectionCheckTime = time.Second * 5
+)
 
 type dialWithBackoff struct {
 	hostname       string
@@ -45,7 +47,6 @@ func (d *backoffHeap) Enqueue(hostname string) {
 		}
 
 		d.attemptsPerPeer[hostname] = newv
-
 	} else {
 		d.attemptsPerPeer[hostname] = 0
 	}
@@ -105,6 +106,7 @@ func (d *backoffHeap) stopAndDrainTimer() {
 		}
 	}
 }
+
 func newBackoffHeap() backoffHeap {
 	b := backoffHeap{
 		heap:            []dialWithBackoff{},
@@ -115,6 +117,7 @@ func newBackoffHeap() backoffHeap {
 	heap.Init(&b)
 
 	b.stopAndDrainTimer() // ensuring it doesn't fire when empty.
+
 	return b
 }
 
@@ -156,26 +159,35 @@ func extractClientCert(ctx context.Context) (*x509.Certificate, error) {
 
 // Interface for heap, don't use directly.
 
-func (d *backoffHeap) Len() int { return len(d.heap) }
+func (d *backoffHeap) Len() int {
+	return len(d.heap)
+}
+
 func (d *backoffHeap) Swap(i int, j int) {
 	d.heap[i], d.heap[j] = d.heap[j], d.heap[i]
 }
+
 func (d *backoffHeap) Push(x any) {
 	if v, ok := x.(dialWithBackoff); ok {
 		d.heap = append(d.heap, v)
 	}
 }
+
 func (d *backoffHeap) peek() *dialWithBackoff {
 	if len(d.heap) == 0 {
 		return nil
 	}
+
 	return &d.heap[0]
 }
+
 func (d *backoffHeap) Less(i int, j int) bool {
 	return d.heap[i].nextRedialTime.Before(d.heap[j].nextRedialTime)
 }
+
 func (d *backoffHeap) Pop() any {
 	elem := d.heap[len(d.heap)-1]
 	d.heap = d.heap[:len(d.heap)-1]
+
 	return elem
 }
