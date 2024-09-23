@@ -56,18 +56,19 @@ func (s *server) sender() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			// TODO: ensure streams and conns are closed.
+			for _, con := range s.connections {
+				con.cc.Close()
+			}
 			return
 
 		case o := <-s.tssMessenger.ProducedOutputMessages():
-			//TODO: Ensure malicious server can't block a broadcast.
 			s.send(o)
+
 		case redial := <-s.redials:
 			if _, ok := s.connections[redial.name]; ok {
 				redial.conn.cc.Close() // shouldn't open the same connection twice.
 				continue
 			}
-
 			s.connections[redial.name] = redial.conn
 
 		case <-connectionCheckTicker.C:
@@ -153,7 +154,7 @@ func (s *server) enqueueRedialRequest(hostname string) {
 		s.logger.Debug("requested redial", zap.String("hostname", hostname))
 		return
 	default:
-		s.logger.Warn("redial attempt failed", zap.String("hostname", hostname))
+		s.logger.Warn("couldn't send request to redial", zap.String("hostname", hostname))
 	}
 }
 

@@ -46,6 +46,8 @@ type testServer struct {
 	atomic.Uint32
 	done                         chan struct{}
 	numberOfReconnectionAttempts int
+	// when set to true, the server will block for 30 seconds.
+	isMaliciousBlocker bool
 }
 
 func (w *testServer) Send(in tsscommv1.DirectLink_SendServer) error {
@@ -53,6 +55,9 @@ func (w *testServer) Send(in tsscommv1.DirectLink_SendServer) error {
 	prevVal := w.Uint32.Add(1)
 	if int(prevVal) == w.numberOfReconnectionAttempts {
 		close(w.done)
+	}
+	if w.isMaliciousBlocker {
+		time.Sleep(time.Second * 30)
 	}
 
 	return io.EOF
@@ -218,8 +223,107 @@ func TestRelentlessReconnections(t *testing.T) {
 	t.FailNow()
 }
 
-func TestBroadcastIsntBlocked(t *testing.T) {
+type tssMockJustForMessageGeneration struct {
+	tss.ReliableMessenger
+	chn chan *tsscommv1.PropagatedMessage
+}
+
+func (m *tssMockJustForMessageGeneration) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
+	return m.chn
+}
+func TestNonBlockedBroadcast(t *testing.T) {
+	a := require.New(t)
+
+	workingServers := []string{"localhost:5500", "localhost:5501"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*40)
+	defer cancel()
+	ctx = testutils.MakeSupervisorContext(ctx)
+
+	en, err := _loadGuardians(3)
+	a.NoError(err)
+
+	donechns := make([]chan struct{}, 2)
+	// set servers up.
+	for i := 0; i < 2; i++ {
+		tmpSrvr, err := NewServer(workingServers[i], supervisor.Logger(ctx), &mockTssMessageHandler{
+			chn:              nil,
+			selfCert:         en[i].GetCertificate(),
+			peersToConnectTo: en[0].GetPeers(), // Give the peer a certificate.
+			peerId:           &tsscommv1.PartyId{},
+		})
+		a.NoError(err)
+
+		tstServer := testServer{
+			server:                       tmpSrvr.(*server),
+			Uint32:                       atomic.Uint32{},
+			done:                         make(chan struct{}),
+			numberOfReconnectionAttempts: 1,
+			isMaliciousBlocker:           true,
+		}
+		donechns[i] = tstServer.done
+		tstServer.server.ctx = ctx
+
+		listener, err := net.Listen("tcp", workingServers[i])
+		a.NoError(err)
+		defer listener.Close()
+
+		gserver := grpc.NewServer(tstServer.makeServerCredentials())
+		defer gserver.Stop()
+
+		tsscommv1.RegisterDirectLinkServer(gserver, &tstServer)
+		go gserver.Serve(listener)
+	}
+
+	for _, v := range en[2].Guardians {
+		if v.Id == en[0].Self.Id {
+			v.Id = "localhost:5500"
+			continue
+		}
+		if v.Id == en[1].Self.Id {
+			v.Id = "localhost:5501"
+			continue
+		}
+		v.Id = ""
+
+	}
+
+	msgChan := make(chan *tsscommv1.PropagatedMessage)
+	srvr, err := NewServer("localhost:5930", supervisor.Logger(ctx), &tssMockJustForMessageGeneration{
+		ReliableMessenger: en[2],
+		chn:               msgChan,
+	})
+	a.NoError(err)
+
+	srv := srvr.(*server)
+	srv.ctx = ctx
+	// setting up server dailer and sender
+	srv.run()
+	time.Sleep(time.Second)
+
+	numDones := 0
+	for i := 0; i < 10; i++ {
+		msgChan <- &tsscommv1.PropagatedMessage{
+			Payload: &tsscommv1.PropagatedMessage_Echo{},
+		}
+
+		select {
+		case <-ctx.Done():
+			t.FailNow()
+		case <-donechns[0]:
+			numDones += 1
+		case <-donechns[1]:
+			numDones += 1
+		default:
+			time.Sleep(time.Millisecond * 100)
+		}
+	}
+	if numDones >= 2 {
+		return
+	}
+
+	cancel()
 	t.FailNow()
+
 }
 
 func TestBackoff(t *testing.T) {
