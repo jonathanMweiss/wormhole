@@ -158,6 +158,8 @@ func (s *server) enqueueRedialRequest(hostname string) {
 }
 
 func (s *server) dailer() {
+	// using a heap instead of time.AfterFunc/ After to reduce the number of
+	// goroutines generated to 0 (not including the dialer itself).
 	waiters := newBackoffHeap()
 
 	for {

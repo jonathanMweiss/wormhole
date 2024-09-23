@@ -141,6 +141,117 @@ func TestTLSConnectAndRedial(t *testing.T) {
 	}
 }
 
+func TestBackoff(t *testing.T) {
+	a := require.New(t)
+	ctx, cncl := context.WithTimeout(context.Background(), time.Second*5)
+	defer cncl()
+
+	t.Run("basic1", func(t *testing.T) {
+		heap := newBackoffHeap()
+
+		heap.Enqueue("3")
+		a.Equal("3", heap.Dequeue())
+		heap.Enqueue("3")
+		heap.Enqueue("1")
+		heap.Enqueue("2")
+
+		expected := []string{"1", "2", "3"}
+		for i := 0; i < 3; i++ {
+			select {
+			case <-ctx.Done():
+				t.FailNow()
+			case <-heap.timer.C:
+				hostname := heap.Dequeue()
+				a.Equal(expected[i], hostname)
+			}
+		}
+	})
+
+	t.Run("basic2", func(t *testing.T) {
+		heap := newBackoffHeap()
+
+		heap.Enqueue("1")
+		a.Equal("1", heap.Dequeue())
+		heap.ResetAttempts("1")
+		heap.Enqueue("1")
+		heap.Enqueue("2")
+		heap.Enqueue("3")
+
+		expected := []string{"1", "2", "3"}
+		for i := 0; i < 3; i++ {
+			select {
+			case <-ctx.Done():
+				t.FailNow()
+			case <-heap.timer.C:
+				hostname := heap.Dequeue()
+				a.Equal(expected[i], hostname)
+			}
+		}
+	})
+
+	t.Run("complex", func(t *testing.T) {
+		heap := newBackoffHeap()
+
+		// operations on an empty heap:
+		heap.stopAndDrainTimer()
+		heap.stopAndDrainTimer()
+		heap.stopAndDrainTimer()
+		heap.setTopAsTimer()
+		a.Equal("", heap.Dequeue())
+
+		heap.ResetAttempts("1")
+		heap.Enqueue("1")
+		heap.Enqueue("1")
+		heap.Enqueue("1")
+		heap.Enqueue("1")
+		a.Equal("1", heap.Dequeue())
+
+		heap.ResetAttempts("1")
+		heap.Enqueue("1")
+		heap.Enqueue("2")
+		heap.Enqueue("3")
+		heap.Enqueue("2")
+		a.Equal("1", heap.Dequeue())
+		a.Equal("2", heap.Dequeue())
+
+		heap.ResetAttempts("2")
+		heap.Enqueue("2")
+		heap.Enqueue("4")
+		heap.Enqueue("5")
+
+		expected := []string{"3", "2", "4", "5"}
+		for i := 0; i < 3; i++ {
+			select {
+			case <-ctx.Done():
+				t.FailNow()
+			case <-heap.timer.C:
+				hostname := heap.Dequeue()
+				a.Equal(expected[i], hostname)
+			}
+		}
+	})
+
+	t.Run("maxAndMinValue", func(t *testing.T) {
+		heap := newBackoffHeap()
+
+		heap.attemptsPerPeer["1"] = 23144532345345665 // large number.
+		heap.Enqueue("1")
+		v := heap.peek()
+
+		a.True(v.nextRedialTime.Before(time.Now().Add(maxBackoffTime)))
+		a.True(v.nextRedialTime.After(time.Now().Add(maxBackoffTime - time.Second)))
+
+		a.Equal("1", heap.Dequeue())
+		timenow := time.Now()
+		heap.ResetAttempts("1")
+		heap.Enqueue("1")
+		v = heap.peek()
+		a.True(v.nextRedialTime.Before(timenow.Add(minBackoffTime + 10*time.Millisecond)))
+		a.True(v.nextRedialTime.After(timenow.Add(minBackoffTime - 10*time.Millisecond)))
+
+	})
+}
+
 // TODO: this is a copy-paste from tss/implementation_test.go
 func loadMockGuardianStorage(gstorageIndex int) (*tss.GuardianStorage, error) {
 	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex)

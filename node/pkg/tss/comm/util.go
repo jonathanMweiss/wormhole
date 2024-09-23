@@ -12,8 +12,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const maxBackoffTime = time.Minute
+const maxAttempts = 10 // max backoff attempts before time doesn't increase.
 const minBackoffTime = time.Millisecond * 100
+const maxBackoffTime = minBackoffTime * 1024
 
 type dialWithBackoff struct {
 	hostname       string
@@ -21,7 +22,7 @@ type dialWithBackoff struct {
 	nextRedialTime time.Time
 }
 
-// Not thread safe
+// NOT THREAD SAFE! do NOT share between two different goroutines.
 type backoffHeap struct {
 	heap            []dialWithBackoff
 	timer           *time.Timer
@@ -36,7 +37,11 @@ func (d *backoffHeap) Enqueue(hostname string) {
 	}
 
 	if v, ok := d.attemptsPerPeer[hostname]; ok {
-		d.attemptsPerPeer[hostname] = v + 1
+		newv := v + 1
+		if newv >= maxAttempts {
+			newv = maxAttempts
+		}
+		d.attemptsPerPeer[hostname] = newv
 	} else {
 		d.attemptsPerPeer[hostname] = 0
 	}
@@ -66,7 +71,7 @@ func (d *backoffHeap) Dequeue() string {
 }
 
 func (d *backoffHeap) ResetAttempts(hostname string) {
-	d.attemptsPerPeer[hostname] = 0
+	delete(d.attemptsPerPeer, hostname)
 }
 
 func (d *backoffHeap) setTopAsTimer() {
@@ -74,8 +79,7 @@ func (d *backoffHeap) setTopAsTimer() {
 		d.stopAndDrainTimer() // no elements: stop the timer.
 		return
 	}
-
-	endTime := d.Peek().nextRedialTime
+	endTime := d.peek().nextRedialTime // we have at least one element.
 
 	d.stopAndDrainTimer()
 	d.timer.Reset(time.Until(endTime))
@@ -84,7 +88,10 @@ func (d *backoffHeap) setTopAsTimer() {
 func (d *backoffHeap) stopAndDrainTimer() {
 	// stopping the timer, if its channel is not drained: drain it.
 	if !d.timer.Stop() && len(d.timer.C) > 0 {
-		<-d.timer.C
+		select {
+		case <-d.timer.C:
+		default:
+		}
 	}
 }
 func newBackoffHeap() backoffHeap {
@@ -145,7 +152,13 @@ func (d *backoffHeap) Swap(i int, j int) {
 func (d *backoffHeap) Push(x any) {
 	d.heap = append(d.heap, x.(dialWithBackoff))
 }
-func (d *backoffHeap) Peek() dialWithBackoff { return d.heap[0] }
+
+func (d *backoffHeap) peek() *dialWithBackoff {
+	if len(d.heap) == 0 {
+		return nil
+	}
+	return &d.heap[0]
+}
 func (d *backoffHeap) Less(i int, j int) bool {
 	return d.heap[i].nextRedialTime.Before(d.heap[j].nextRedialTime)
 }
