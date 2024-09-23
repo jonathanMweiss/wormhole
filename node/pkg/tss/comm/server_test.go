@@ -44,13 +44,14 @@ func (m *mockTssMessageHandler) HandleIncomingTssMessage(msg *tsscommv1.Propagat
 type testServer struct {
 	*server
 	atomic.Uint32
-	done chan struct{}
+	done                         chan struct{}
+	numberOfReconnectionAttempts int
 }
 
 func (w *testServer) Send(in tsscommv1.DirectLink_SendServer) error {
 	fmt.Println("Send Called")
 	prevVal := w.Uint32.Add(1)
-	if prevVal == 2 {
+	if int(prevVal) == w.numberOfReconnectionAttempts {
 		close(w.done)
 	}
 
@@ -76,9 +77,10 @@ func TestTLSConnectAndRedial(t *testing.T) {
 	a.NoError(err)
 
 	tstServer := testServer{
-		server: tmpSrvr.(*server),
-		Uint32: atomic.Uint32{},
-		done:   make(chan struct{}),
+		server:                       tmpSrvr.(*server),
+		Uint32:                       atomic.Uint32{},
+		done:                         make(chan struct{}),
+		numberOfReconnectionAttempts: 2,
 	}
 	tstServer.server.ctx = ctx
 
@@ -90,12 +92,7 @@ func TestTLSConnectAndRedial(t *testing.T) {
 	defer gserver.Stop()
 
 	tsscommv1.RegisterDirectLinkServer(gserver, &tstServer)
-	go func() {
-		err := gserver.Serve(listener)
-		if err != nil {
-			fmt.Println("WTF:", err)
-		}
-	}()
+	go gserver.Serve(listener)
 
 	PEMCert := en[0].GuardianStorage.TlsX509
 	serverCert, err := internal.PemToCert(PEMCert)
@@ -139,6 +136,90 @@ func TestTLSConnectAndRedial(t *testing.T) {
 		t.FailNow()
 	case <-tstServer.done:
 	}
+}
+
+func TestRelentlessReconnections(t *testing.T) {
+	a := require.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
+	defer cancel()
+	ctx = testutils.MakeSupervisorContext(ctx)
+
+	en, err := _loadGuardians(2)
+	a.NoError(err)
+
+	PEMCert := en[0].GuardianStorage.TlsX509
+	serverCert, err := internal.PemToCert(PEMCert)
+	a.NoError(err)
+
+	msgChan := make(chan *tsscommv1.PropagatedMessage)
+	srvr, err := NewServer("localhost:5930", supervisor.Logger(ctx), &mockTssMessageHandler{
+		chn:              msgChan,
+		selfCert:         en[1].GetCertificate(),
+		peersToConnectTo: []*x509.Certificate{serverCert}, // will ask to fetch each peer (and return the below peerId)
+		peerId: &tsscommv1.PartyId{
+			Id: workingServerSock,
+		},
+	})
+	a.NoError(err)
+
+	srv := srvr.(*server)
+	srv.ctx = ctx
+	// setting up server dailer and sender
+	srv.run()
+
+	tmpSrvr, err := NewServer(workingServerSock, supervisor.Logger(ctx), &mockTssMessageHandler{
+		chn:      nil,
+		selfCert: en[0].GetCertificate(),
+		// connect to no one.
+		peersToConnectTo: en[0].GetPeers(), // Give the peer a certificate.
+		peerId:           &tsscommv1.PartyId{},
+	})
+	a.NoError(err)
+
+	tstServer := testServer{
+		server:                       tmpSrvr.(*server),
+		Uint32:                       atomic.Uint32{},
+		done:                         make(chan struct{}),
+		numberOfReconnectionAttempts: 5,
+	}
+	tstServer.server.ctx = ctx
+
+	listener, err := net.Listen("tcp", workingServerSock)
+	a.NoError(err)
+	defer listener.Close()
+
+	gserver := grpc.NewServer(tstServer.makeServerCredentials())
+	defer gserver.Stop()
+
+	tsscommv1.RegisterDirectLinkServer(gserver, &tstServer)
+	go gserver.Serve(listener)
+
+	for i := 0; i < 10; i++ {
+		msgChan <- &tsscommv1.PropagatedMessage{
+			Payload: &tsscommv1.PropagatedMessage_Unicast{
+				Unicast: &tsscommv1.SignedMessage{Recipients: []*tsscommv1.PartyId{
+					{
+						Id: workingServerSock,
+					},
+				}},
+			},
+		}
+
+		select {
+		case <-ctx.Done():
+			t.FailNow()
+		case <-tstServer.done:
+			return // only way to pass the test.
+		default:
+			time.Sleep(time.Millisecond * 100)
+		}
+	}
+
+	t.FailNow()
+}
+
+func TestBroadcastIsntBlocked(t *testing.T) {
+	t.FailNow()
 }
 
 func TestBackoff(t *testing.T) {

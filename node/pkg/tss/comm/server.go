@@ -101,7 +101,7 @@ func (s *server) send(msg *tsscommv1.PropagatedMessage) {
 func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
 	m, ok := msg.Payload.(*tsscommv1.PropagatedMessage_Unicast)
 	if !ok {
-		panic("unicast should always be called with payload of type PropagatedMessage_Unicast")
+		return // shouldn't happen.
 	}
 
 	for _, recipient := range m.Unicast.Recipients {
