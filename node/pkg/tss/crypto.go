@@ -1,53 +1,90 @@
 package tss
 
 import (
-	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"encoding/binary"
+	"fmt"
+	"io"
+
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
+	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	"golang.org/x/crypto/sha3"
 )
 
-type digest [32]byte
-
-type signature []byte
+type digest [32]byte // TODO: Consider using the common.Hash they use in other places.
 
 func hash(msg []byte) digest {
 	d := sha3.Sum256(msg)
 	return d
 }
-func (t *Engine) authAndDecrypt(maccedMsg *gossipv1.SignedMessage) error {
-	// TODO
-	return nil
+
+// using this function since proto.Marshal is either non-deterministic,
+// or it isn't canonical - as stated in proto.MarshalOptions docs.
+
+func hashSignedMessage(msg *tsscommv1.SignedMessage) digest {
+	b := bytes.NewBuffer(nil)
+	b.Write(msg.Payload)
+	writePartyID(b, msg.Sender)
+
+	for _, r := range msg.Recipients {
+		writePartyID(b, r)
+	}
+
+	vaa.MustWrite(b, binary.BigEndian, msg.MsgSerialNumber)
+	return hash(b.Bytes())
 }
 
-func (t *Engine) encryptAndMac(msg *gossipv1.SignedMessage) {
+func writePartyID(writer io.Writer, id *tsscommv1.PartyId) {
+	writer.Write([]byte(id.Id))
+	writer.Write(id.Key)
+	writer.Write([]byte(id.Moniker))
+	vaa.MustWrite(writer, binary.BigEndian, id.Index)
+}
+
+func (t *Engine) sign(msg *tsscommv1.SignedMessage) error {
 	if msg.Sender == nil {
 		msg.Sender = partyIdToProto(t.Self)
 	}
+	digest := hashSignedMessage(msg)
 
-	msg.Authentication = &gossipv1.SignedMessage_MAC{
-		MAC: []byte("signature"),
-	}
+	sig, err := t.GuardianStorage.signingKey.Sign(rand.Reader, digest[:], nil)
+	msg.Signature = sig
+	return err
 }
 
-func (t *Engine) sign(msg *gossipv1.SignedMessage) {
-	if msg.Sender == nil {
-		msg.Sender = partyIdToProto(t.Self)
-	}
-	msg.Authentication = &gossipv1.SignedMessage_Signature{
-		Signature: []byte("signature"),
-	}
-}
-
-func (st *GuardianStorage) verifyEcho(msg *gossipv1.Echo) error {
-	// TODO
-	return nil
-}
-func (t *Engine) signEcho(msg *gossipv1.Echo) error {
+func (t *Engine) setEchoerField(msg *tsscommv1.Echo) error {
 	msg.Echoer = partyIdToProto(t.Self)
-	msg.Signature = []byte("signature")
 	return nil
 }
 
-func (st *GuardianStorage) verifySignedMessage(msg *gossipv1.SignedMessage) error {
-	// TODO
+var ErrInvalidSignature = fmt.Errorf("invalid signature")
+
+var errEMptySignature = fmt.Errorf("empty signature")
+
+func (st *GuardianStorage) verifySignedMessage(msg *tsscommv1.SignedMessage) error {
+	if msg.Signature == nil {
+		return errEMptySignature
+	}
+
+	cert, err := st.FetchCertificate(msg.Sender)
+	if err != nil {
+		return err
+	}
+
+	pk, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("certificated stored with non-ecdsa public key, guardian storage is corrupted")
+	}
+
+	digest := hashSignedMessage(msg)
+
+	isValid := ecdsa.VerifyASN1(pk, digest[:], msg.Signature)
+
+	if !isValid {
+		return ErrInvalidSignature
+	}
+
 	return nil
 }

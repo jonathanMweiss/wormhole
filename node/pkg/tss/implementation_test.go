@@ -2,23 +2,20 @@ package tss
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
-	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
-	"github.com/certusone/wormhole/node/pkg/supervisor"
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -37,36 +34,22 @@ var (
 	allRounds = append(unicastRounds, broadcastRounds...)
 )
 
-func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
-	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex)
-	if err != nil {
-		panic(err)
-	}
-
-	st, err := NewGuardianStorageFromFile(path)
-	if err != nil {
-		panic(err)
-	}
-	return st
-}
-
-func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *gossipv1.Echo {
+func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *tsscommv1.Echo {
 	payload, _, err := parsed.WireBytes()
 	a.NoError(err)
 
-	echo1 := &gossipv1.Echo{
-		Message: &gossipv1.SignedMessage{
+	echo1 := &tsscommv1.Echo{
+		Message: &tsscommv1.SignedMessage{
 			Payload:         payload,
 			Sender:          partyIdToProto(t.Self),
 			Recipients:      nil,
 			MsgSerialNumber: 0,
-			Authentication:  nil,
+			Signature:       nil,
 		},
-		Signature: []byte{},
-		Echoer:    &gossipv1.PartyId{},
+		Echoer: &tsscommv1.PartyId{},
 	}
-
-	a.NoError(t.signEcho(echo1))
+	a.NoError(t.sign(echo1.Message))
+	a.NoError(t.setEchoerField(echo1))
 
 	return echo1
 }
@@ -82,9 +65,10 @@ func TestBroadcast(t *testing.T) {
 		// then add another one for the same round.
 		for j, rnd := range allRounds {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
-			// parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
 
-			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, parsedIntoEcho(a, e1, parsed1))
+			echo := parsedIntoEcho(a, e1, parsed1)
+
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
@@ -102,14 +86,14 @@ func TestBroadcast(t *testing.T) {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.signEcho(echo))
+			a.NoError(e2.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.signEcho(echo))
+			a.NoError(e3.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -131,21 +115,21 @@ func TestDeliver(t *testing.T) {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.signEcho(echo))
+			a.NoError(e2.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.signEcho(echo))
+			a.NoError(e3.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e1.signEcho(echo))
+			a.NoError(e1.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -164,28 +148,28 @@ func TestDeliver(t *testing.T) {
 		for j, rnd := range allRounds {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.signEcho(echo))
+			a.NoError(e2.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.signEcho(echo))
+			a.NoError(e3.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e1.signEcho(echo))
+			a.NoError(e1.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.True(shouldDeliver)
 
-			a.NoError(e4.signEcho(echo))
+			a.NoError(e4.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -255,15 +239,13 @@ func TestEquivocation(t *testing.T) {
 
 			bts, _, err := parsed1.WireBytes()
 			a.NoError(err)
-			msg := &gossipv1.PropagatedMessage_Unicast{
-				Unicast: &gossipv1.SignedMessage{
+			msg := &tsscommv1.PropagatedMessage_Unicast{
+				Unicast: &tsscommv1.SignedMessage{
 					Payload:         bts,
 					Sender:          partyIdToProto(e1.Self),
-					Recipients:      []*gossipv1.PartyId{partyIdToProto(e2.Self)},
+					Recipients:      []*tsscommv1.PartyId{partyIdToProto(e2.Self)},
 					MsgSerialNumber: 0,
-					Authentication: &gossipv1.SignedMessage_MAC{
-						MAC: []byte{1, 2, 3},
-					},
+					Signature:       nil,
 				},
 			}
 
@@ -292,7 +274,7 @@ func TestE2E(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*60)
 	defer cancel()
-	ctx = setSupervisor(ctx)
+	ctx = testutils.MakeSupervisorContext(ctx)
 
 	fmt.Println("starting engines.")
 	for _, engine := range engines {
@@ -316,26 +298,6 @@ func TestE2E(t *testing.T) {
 	}
 }
 
-func setSupervisor(ctx context.Context) context.Context {
-	var supervisedCtx context.Context
-
-	logger := zap.New(
-		zapcore.NewCore(
-			zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
-			zapcore.AddSync(zapcore.Lock(os.Stderr)),
-			zap.NewAtomicLevelAt(zapcore.Level(zapcore.DebugLevel)),
-		),
-	)
-
-	supervisor.New(ctx, logger, func(ctx context.Context) error {
-		supervisedCtx = ctx
-		<-ctx.Done()
-		return ctx.Err()
-	})
-
-	return supervisedCtx
-}
-
 func TestMessagesWithBadRounds(t *testing.T) {
 	a := assert.New(t)
 	gs := loadGuardians(a)
@@ -350,17 +312,16 @@ func TestMessagesWithBadRounds(t *testing.T) {
 			bts, _, err := parsed.WireBytes()
 			a.NoError(err)
 
-			m := &gossipv1.PropagatedMessage_Unicast{
-				Unicast: &gossipv1.SignedMessage{
+			m := &tsscommv1.PropagatedMessage_Unicast{
+				Unicast: &tsscommv1.SignedMessage{
 					Payload:         bts,
 					Sender:          partyIdToProto(from),
-					Recipients:      []*gossipv1.PartyId{partyIdToProto(to)},
+					Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
 					MsgSerialNumber: 0,
-					Authentication: &gossipv1.SignedMessage_MAC{
-						MAC: []byte{1, 2, 3},
-					},
+					Signature:       nil,
 				},
 			}
+			a.NoError(e1.sign(m.Unicast))
 			err = e2.handleUnicast(m)
 			a.ErrorIs(err, errUnicastBadRound)
 		}
@@ -373,21 +334,19 @@ func TestMessagesWithBadRounds(t *testing.T) {
 			bts, _, err := parsed.WireBytes()
 			a.NoError(err)
 
-			m := &gossipv1.PropagatedMessage_Echo{
-				Echo: &gossipv1.Echo{
-					Message: &gossipv1.SignedMessage{
+			m := &tsscommv1.PropagatedMessage_Echo{
+				Echo: &tsscommv1.Echo{
+					Message: &tsscommv1.SignedMessage{
 						Payload:         bts,
 						Sender:          partyIdToProto(from),
-						Recipients:      []*gossipv1.PartyId{partyIdToProto(to)},
+						Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
 						MsgSerialNumber: 0,
-						Authentication: &gossipv1.SignedMessage_Signature{
-							Signature: []byte{1, 2, 3},
-						},
+						Signature:       nil,
 					},
-					Signature: []byte{1, 2, 3},
-					Echoer:    partyIdToProto(from),
+					Echoer: partyIdToProto(from),
 				},
 			}
+			a.NoError(e1.sign(m.Echo.Message))
 			_, err = e2.handleEcho(m)
 			a.ErrorIs(err, errBadRoundsInEcho)
 		}
@@ -445,14 +404,40 @@ func generateFakeMessageWithRandomContent(from, to *tss.PartyID, rnd signingRoun
 	return tss.NewMessage(meta, content, tss.NewMessageWrapper(meta, content, trackingId.Bytes()...))
 }
 
-func loadGuardians(a *assert.Assertions) []*Engine {
-	engines := make([]*Engine, Participants)
-
-	for i := 0; i < Participants; i++ {
-		e, err := NewReliableTSS(loadMockGuardianStorage(i))
-		a.NoError(err)
-		engines[i] = e.(*Engine)
+func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
+	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex)
+	if err != nil {
+		panic(err)
 	}
+
+	st, err := NewGuardianStorageFromFile(path)
+	if err != nil {
+		panic(err)
+	}
+	return st
+}
+
+func _loadGuardians(numParticipants int) ([]*Engine, error) {
+	engines := make([]*Engine, numParticipants)
+
+	for i := 0; i < numParticipants; i++ {
+		e, err := NewReliableTSS(loadMockGuardianStorage(i))
+		if err != nil {
+			return nil, err
+		}
+		en, ok := e.(*Engine)
+		if !ok {
+			return nil, errors.New("not an engine")
+		}
+		engines[i] = en
+	}
+
+	return engines, nil
+}
+
+func loadGuardians(a *assert.Assertions) []*Engine {
+	engines, err := _loadGuardians(Participants)
+	a.NoError(err)
 
 	return engines
 }
@@ -465,9 +450,9 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 		wg := sync.WaitGroup{}
 		wg.Add(len(engines) * 2)
 
-		chns := make([]chan *gossipv1.GossipMessage_TssMessage, len(engines))
+		chns := make([]chan *tsscommv1.PropagatedMessage, len(engines))
 		for i := range chns {
-			chns[i] = make(chan *gossipv1.GossipMessage_TssMessage, 10000)
+			chns[i] = make(chan *tsscommv1.PropagatedMessage, 10000)
 		}
 
 		for i, e := range engines {
@@ -500,7 +485,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						return
 					case m := <-engine.ProducedOutputMessages():
 						for _, feedChn := range chns { // treating everything as broadcast for ease of use.
-							feedChn <- m.Message.(*gossipv1.GossipMessage_TssMessage)
+							feedChn <- m
 						}
 					case <-engine.ProducedSignature():
 						once.Do(func() { close(signalSuccess) })

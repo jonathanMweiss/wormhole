@@ -3,7 +3,7 @@ package tss
 import (
 	"fmt"
 
-	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
 	"go.uber.org/zap"
@@ -59,6 +59,9 @@ func logErr(l *zap.Logger, err error) {
 			informativeErr.Error(),
 			zap.String("round", string(informativeErr.round)),
 		)
+	default:
+		// no additional fields
+		l.Error(informativeErr.Error())
 	}
 }
 
@@ -66,7 +69,7 @@ func equalPartyIds(a, b *tss.PartyID) bool {
 	return a.Id == b.Id && string(a.Key) == string(b.Key)
 }
 
-func protoToPartyId(pid *gossipv1.PartyId) *tss.PartyID {
+func protoToPartyId(pid *tsscommv1.PartyId) *tss.PartyID {
 	return &tss.PartyID{
 		MessageWrapper_PartyID: &tss.MessageWrapper_PartyID{
 			Id:      pid.Id,
@@ -77,8 +80,8 @@ func protoToPartyId(pid *gossipv1.PartyId) *tss.PartyID {
 	}
 }
 
-func partyIdToProto(pid *tss.PartyID) *gossipv1.PartyId {
-	return &gossipv1.PartyId{
+func partyIdToProto(pid *tss.PartyID) *tsscommv1.PartyId {
+	return &tsscommv1.PartyId{
 		Id:      pid.Id,
 		Moniker: pid.Moniker,
 		Key:     pid.Key,
@@ -97,13 +100,9 @@ var (
 	ErrNilPayload            = fmt.Errorf("SignedMessage doesn't contain a payload")
 )
 
-func vaidateEchoCorrectForm(e *gossipv1.Echo) error {
+func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 	if e == nil {
 		return ErrEchoIsNil
-	}
-
-	if e.Signature == nil {
-		return ErrNoEchoSignature
 	}
 
 	if err := validatePartIdProtoCorrectForm(e.Echoer); err != nil {
@@ -114,10 +113,14 @@ func vaidateEchoCorrectForm(e *gossipv1.Echo) error {
 		return fmt.Errorf("echo message error:%w", err)
 	}
 
+	if len(e.Message.Signature) == 0 {
+		return ErrNoAuthenticationField
+	}
+
 	return nil
 }
 
-func validatePartIdProtoCorrectForm(p *gossipv1.PartyId) error {
+func validatePartIdProtoCorrectForm(p *tsscommv1.PartyId) error {
 	if p == nil {
 		return ErrNilPartyId
 	}
@@ -134,7 +137,7 @@ func validatePartIdProtoCorrectForm(p *gossipv1.PartyId) error {
 
 }
 
-func validateSignedMessageCorrectForm(m *gossipv1.SignedMessage) error {
+func validateSignedMessageCorrectForm(m *tsscommv1.SignedMessage) error {
 	if m == nil {
 		return ErrSignedMessageIsNil
 	}
@@ -153,18 +156,7 @@ func validateSignedMessageCorrectForm(m *gossipv1.SignedMessage) error {
 		}
 	}
 
-	if m.Authentication == nil {
-		return ErrNoAuthenticationField
-	}
-
-	if s, ok := m.Authentication.(*gossipv1.SignedMessage_Signature); ok && s.Signature == nil {
-		return ErrNoAuthenticationField
-	}
-
-	if mac, ok := m.Authentication.(*gossipv1.SignedMessage_MAC); ok && mac.MAC == nil {
-		return ErrNoAuthenticationField
-	}
-
+	// not checking the signature, since it is allowed to be nil in unicast.
 	return nil
 }
 

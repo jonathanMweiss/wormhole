@@ -57,6 +57,7 @@ const LOCAL_RPC_PORTRANGE_START = 10000
 const LOCAL_P2P_PORTRANGE_START = 11000
 const LOCAL_STATUS_PORTRANGE_START = 12000
 const LOCAL_PUBLICWEB_PORTRANGE_START = 13000
+const LOCAL_TSS_PORTRANGE_START = 14000
 
 var PROMETHEUS_METRIC_VALID_HEARTBEAT_RECEIVED = "wormhole_p2p_broadcast_messages_received_total{type=\"valid_heartbeat\"}"
 
@@ -89,23 +90,25 @@ type mockGuardian struct {
 }
 
 type guardianConfig struct {
-	publicSocket string
-	adminSocket  string
-	publicRpc    string
-	publicWeb    string
-	statusPort   uint
-	p2pPort      uint
+	publicSocket   string
+	adminSocket    string
+	publicRpc      string
+	publicWeb      string
+	statusPort     uint
+	p2pPort        uint
+	tssNetworkPort uint
 }
 
 func createGuardianConfig(t testing.TB, testId uint, mockGuardianIndex uint) *guardianConfig {
 	t.Helper()
 	return &guardianConfig{
-		publicSocket: fmt.Sprintf("/tmp/test_guardian_%d_public.socket", mockGuardianIndex+testId*20),
-		adminSocket:  fmt.Sprintf("/tmp/test_guardian_%d_admin.socket", mockGuardianIndex+testId*20), // TODO consider using os.CreateTemp("/tmp", "test_guardian_adminXXXXX.socket"),
-		publicRpc:    fmt.Sprintf("127.0.0.1:%d", mockGuardianIndex+LOCAL_RPC_PORTRANGE_START+testId*20),
-		publicWeb:    fmt.Sprintf("127.0.0.1:%d", mockGuardianIndex+LOCAL_PUBLICWEB_PORTRANGE_START+testId*20),
-		statusPort:   mockGuardianIndex + LOCAL_STATUS_PORTRANGE_START + testId*20,
-		p2pPort:      mockGuardianIndex + LOCAL_P2P_PORTRANGE_START + testId*20,
+		publicSocket:   fmt.Sprintf("/tmp/test_guardian_%d_public.socket", mockGuardianIndex+testId*20),
+		adminSocket:    fmt.Sprintf("/tmp/test_guardian_%d_admin.socket", mockGuardianIndex+testId*20), // TODO consider using os.CreateTemp("/tmp", "test_guardian_adminXXXXX.socket"),
+		publicRpc:      fmt.Sprintf("127.0.0.1:%d", mockGuardianIndex+LOCAL_RPC_PORTRANGE_START+testId*20),
+		publicWeb:      fmt.Sprintf("127.0.0.1:%d", mockGuardianIndex+LOCAL_PUBLICWEB_PORTRANGE_START+testId*20),
+		statusPort:     mockGuardianIndex + LOCAL_STATUS_PORTRANGE_START + testId*20,
+		p2pPort:        mockGuardianIndex + LOCAL_P2P_PORTRANGE_START + testId*20,
+		tssNetworkPort: mockGuardianIndex + LOCAL_TSS_PORTRANGE_START + testId*20,
 	}
 }
 
@@ -146,6 +149,7 @@ func newMockGuardianSet(t testing.TB, testId uint, n int) []*mockGuardian {
 		}
 	}
 
+	overridePortOfTss(gs)
 	return gs
 }
 
@@ -156,6 +160,29 @@ func mockGuardianSetToGuardianAddrList(t testing.TB, gs []*mockGuardian) []eth_c
 		result[i] = g.guardianAddr
 	}
 	return result
+}
+
+func overridePortOfTss(gs []*mockGuardian) {
+	idToPort := map[string]string{}
+	for _, g := range gs {
+		cnfg := g.config
+		idToPort[g.tssEngine.(*tss.Engine).GuardianStorage.Self.Id] = fmt.Sprintf("localhost:%d", cnfg.tssNetworkPort)
+	}
+
+	// go to each guardian and change the ID of everyone including self.
+	// for each member, grab its port, then change it in the peer of the guardian.
+
+	for _, g := range gs {
+		en := g.tssEngine.(*tss.Engine)
+		en.Self.Id = idToPort[en.Self.Id]
+		for _, pid := range en.Guardians {
+			if _, ok := idToPort[pid.Id]; !ok {
+				continue
+			}
+			pid.Id = idToPort[pid.Id]
+		}
+
+	}
 }
 
 // mockGuardianRunnable returns a runnable that first sets up a mock guardian an then runs it.
@@ -216,6 +243,7 @@ func mockGuardianRunnable(t testing.TB, gs []*mockGuardian, mockGuardianIndex ui
 			GuardianOptionAdminService(cfg.adminSocket, nil, nil, rpcMap),
 			GuardianOptionStatusServer(fmt.Sprintf("[::]:%d", cfg.statusPort)),
 			GuardianOptionProcessor(),
+			GuardianOptionTSSNetwork(fmt.Sprintf("[::]:%d", cfg.tssNetworkPort)),
 		}
 
 		guardianNode := NewGuardianNode(
@@ -730,6 +758,8 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, inf
 			waitForHeartbeatsInLogs(t, zapObserver, gs)
 		}
 		logger.Info("All Guardians have received at least one heartbeat.")
+
+		time.Sleep(time.Second * 3) // adding wait to ensure all guardians have direct connections for TSS.
 
 		// have them make observations
 		for _, testCase := range testCases {

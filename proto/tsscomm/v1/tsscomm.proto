@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package tsscomm.v1;
+
+option go_package = "github.com/certusone/wormhole/node/pkg/proto/tss/v1;tsscommv1";
+import "google/protobuf/empty.proto";
+
+
+// DirectLink is used for TSS communications between guardians.
+// Since TSS requires reliable broadcast logic
+service DirectLink {
+    // Send uses a stream since the clients of this RPC will invoke it multiple times throughout the life of the server.
+    rpc Send(stream PropagatedMessage) returns (google.protobuf.Empty);
+}
+
+// copyOfTssLib proto.
+message PartyId{
+  string id = 1;
+  string moniker = 2;
+  bytes key = 3;
+  uint32 index = 4;
+}
+
+
+// SignedMessage is a message containing a payload for someone specific (containing encrypted and
+// MACed payload) or as a broadcast message (plaintext but signed).
+message SignedMessage {
+  // the message itself
+  bytes payload = 1; // In case of unicast: should be encrypted with a specific DH derived shared key.
+
+  // both of the following fields are used by the TSS lib, and can be used by the reliable-broadcast protocol.
+  PartyId sender = 2;
+  repeated PartyId recipients = 3;
+
+  // used to identify the number of message for this sender. starts from 0 and advances with each message this signer sends.
+  uint64 msg_serial_number = 4;
+
+  // if this message is part of reliable broadcast protocol, it should include the signature of the sender.
+  // otherwise it should contain the mac over this message.
+  bytes signature = 6;
+}
+
+// Echo is a message explicitly used by the Reliable Broadcast protocol.
+message Echo {
+  SignedMessage message = 1;
+
+  // Since we use Two way authentication, we know who the echoer is.
+  PartyId echoer = 3;
+}
+
+// PropagatedMessage is a message that is sent across the network,
+// either to a specific recipient or all nodes (using reliable broadcast).
+message PropagatedMessage {
+  oneof payload{
+    SignedMessage Unicast = 1;
+    Echo Echo = 2;
+  }
+}
