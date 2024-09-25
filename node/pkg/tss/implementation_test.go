@@ -44,13 +44,12 @@ func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *
 			Sender:          partyIdToProto(t.Self),
 			Recipients:      nil,
 			MsgSerialNumber: 0,
-			Authentication:  nil,
+			Signature:       nil,
 		},
-		Signature: []byte{},
-		Echoer:    &tsscommv1.PartyId{},
+		Echoer: &tsscommv1.PartyId{},
 	}
-
-	a.NoError(t.signEcho(echo1))
+	a.NoError(t.sign(echo1.Message))
+	a.NoError(t.setEchoerField(echo1))
 
 	return echo1
 }
@@ -66,9 +65,10 @@ func TestBroadcast(t *testing.T) {
 		// then add another one for the same round.
 		for j, rnd := range allRounds {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
-			// parsed1 := signing.NewSignRound3Message(e1.Self, big.NewInt(0), big.NewInt(0))
 
-			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, parsedIntoEcho(a, e1, parsed1))
+			echo := parsedIntoEcho(a, e1, parsed1)
+
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
@@ -86,14 +86,14 @@ func TestBroadcast(t *testing.T) {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.signEcho(echo))
+			a.NoError(e2.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.signEcho(echo))
+			a.NoError(e3.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -115,21 +115,21 @@ func TestDeliver(t *testing.T) {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.signEcho(echo))
+			a.NoError(e2.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.signEcho(echo))
+			a.NoError(e3.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e1.signEcho(echo))
+			a.NoError(e1.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -148,28 +148,28 @@ func TestDeliver(t *testing.T) {
 		for j, rnd := range allRounds {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.signEcho(echo))
+			a.NoError(e2.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.signEcho(echo))
+			a.NoError(e3.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e1.signEcho(echo))
+			a.NoError(e1.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.True(shouldDeliver)
 
-			a.NoError(e4.signEcho(echo))
+			a.NoError(e4.setEchoerField(echo))
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -245,9 +245,7 @@ func TestEquivocation(t *testing.T) {
 					Sender:          partyIdToProto(e1.Self),
 					Recipients:      []*tsscommv1.PartyId{partyIdToProto(e2.Self)},
 					MsgSerialNumber: 0,
-					Authentication: &tsscommv1.SignedMessage_MAC{
-						MAC: []byte{1, 2, 3},
-					},
+					Signature:       nil,
 				},
 			}
 
@@ -320,11 +318,10 @@ func TestMessagesWithBadRounds(t *testing.T) {
 					Sender:          partyIdToProto(from),
 					Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
 					MsgSerialNumber: 0,
-					Authentication: &tsscommv1.SignedMessage_MAC{
-						MAC: []byte{1, 2, 3},
-					},
+					Signature:       nil,
 				},
 			}
+			a.NoError(e1.sign(m.Unicast))
 			err = e2.handleUnicast(m)
 			a.ErrorIs(err, errUnicastBadRound)
 		}
@@ -344,14 +341,12 @@ func TestMessagesWithBadRounds(t *testing.T) {
 						Sender:          partyIdToProto(from),
 						Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
 						MsgSerialNumber: 0,
-						Authentication: &tsscommv1.SignedMessage_Signature{
-							Signature: []byte{1, 2, 3},
-						},
+						Signature:       nil,
 					},
-					Signature: []byte{1, 2, 3},
-					Echoer:    partyIdToProto(from),
+					Echoer: partyIdToProto(from),
 				},
 			}
+			a.NoError(e1.sign(m.Echo.Message))
 			_, err = e2.handleEcho(m)
 			a.ErrorIs(err, errBadRoundsInEcho)
 		}

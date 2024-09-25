@@ -59,6 +59,9 @@ func logErr(l *zap.Logger, err error) {
 			informativeErr.Error(),
 			zap.String("round", string(informativeErr.round)),
 		)
+	default:
+		// no additional fields
+		l.Error(informativeErr.Error())
 	}
 }
 
@@ -102,16 +105,16 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return ErrEchoIsNil
 	}
 
-	if e.Signature == nil {
-		return ErrNoEchoSignature
-	}
-
 	if err := validatePartIdProtoCorrectForm(e.Echoer); err != nil {
 		return err
 	}
 
 	if err := validateSignedMessageCorrectForm(e.Message); err != nil {
 		return fmt.Errorf("echo message error:%w", err)
+	}
+
+	if len(e.Message.Signature) == 0 {
+		return ErrNoAuthenticationField
 	}
 
 	return nil
@@ -153,18 +156,7 @@ func validateSignedMessageCorrectForm(m *tsscommv1.SignedMessage) error {
 		}
 	}
 
-	if m.Authentication == nil {
-		return ErrNoAuthenticationField
-	}
-
-	if s, ok := m.Authentication.(*tsscommv1.SignedMessage_Signature); ok && s.Signature == nil {
-		return ErrNoAuthenticationField
-	}
-
-	if mac, ok := m.Authentication.(*tsscommv1.SignedMessage_MAC); ok && mac.MAC == nil {
-		return ErrNoAuthenticationField
-	}
-
+	// not checking the signature, since it is allowed to be nil in unicast.
 	return nil
 }
 

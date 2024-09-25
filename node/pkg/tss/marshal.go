@@ -1,6 +1,7 @@
 package tss
 
 import (
+	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -74,14 +75,22 @@ func (s *GuardianStorage) load(storagePath string) error {
 		return fmt.Errorf("number of guardians and guardiansCerts do not match")
 	}
 
+	return s.parseCerts()
+}
+
+func (s *GuardianStorage) parseCerts() error {
 	s.guardiansCerts = make([]*x509.Certificate, len(s.Guardians))
 	for i, cert := range s.GuardianCerts {
 		c, err := internal.PemToCert(cert)
 		if err != nil {
 			return fmt.Errorf("error parsing guardian %v cert: %v", i, err)
 		}
+
+		if _, ok := c.PublicKey.(*ecdsa.PublicKey); !ok {
+			return fmt.Errorf("error guardian %v cert stored with non-ecdsa publickey", i)
+		}
+
 		s.guardiansCerts[i] = c
 	}
-
 	return nil
 }

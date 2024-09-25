@@ -7,7 +7,6 @@ import (
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/yossigi/tss-lib/v2/tss"
-	"google.golang.org/protobuf/proto"
 )
 
 // The following code follows Bracha's reliable broadcast algorithm.
@@ -24,7 +23,7 @@ type broadcaststate struct {
 	message       *tsscommv1.SignedMessage
 	messageDigest digest
 
-	votes map[voterId]signature
+	votes map[voterId]bool
 	// if set to true: don't echo again, even if received from original sender.
 	echoedAlready bool
 	// if set to true: don't deliver again.
@@ -54,19 +53,15 @@ var ErrEquivicatingGuardian = fmt.Errorf("equivication, guardian sent two differ
 func (s *broadcaststate) updateState(f int, msg *tsscommv1.Echo) (shouldEcho bool, err error) {
 	isMsgSrc := equalPartyIds(protoToPartyId(msg.Echoer), protoToPartyId(msg.Message.Sender))
 
-	tmp, err := proto.Marshal(msg.Message)
-	if err != nil {
-		return false, err
-	}
 	// checking outside of lock since s.messageDigest is read only after creation.
-	if s.messageDigest != hash(tmp) {
+	if s.messageDigest != hashSignedMessage(msg.Message) {
 		return false, fmt.Errorf("%w: %v", ErrEquivicatingGuardian, msg.Echoer)
 	}
 
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	s.votes[voterId{id: msg.Echoer.Id, key: string(msg.Echoer.Key)}] = msg.Signature // stores only validate
+	s.votes[voterId{id: msg.Echoer.Id, key: string(msg.Echoer.Key)}] = true // stores only validate
 	if s.echoedAlready {
 		return
 	}
@@ -102,16 +97,15 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg *tsscommv1
 	t.mtx.Lock()
 	state, ok := t.received[d]
 	if !ok {
-		tmp, err := proto.Marshal(msg.Message)
-		if err != nil {
+		if err := t.verifySignedMessage(msg.Message); err != nil {
 			return false, false, err
 		}
 
 		state = &broadcaststate{
 			timeReceived:     time.Now(),
 			message:          msg.Message,
-			messageDigest:    hash(tmp),
-			votes:            make(map[voterId]signature),
+			messageDigest:    hashSignedMessage(msg.Message),
+			votes:            make(map[voterId]bool),
 			echoedAlready:    false,
 			alreadyDelivered: false,
 			mtx:              &sync.Mutex{},
@@ -120,10 +114,7 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg *tsscommv1
 	}
 	t.mtx.Unlock()
 
-	// TODO optimisation: don't verify msgs that were already seen.
-	if err := t.GuardianStorage.verifyEcho(msg); err != nil {
-		return false, false, err
-	}
+	// If we weren't using TLS - at this point we would have to verify the signature of the message.
 
 	f := t.GuardianStorage.getMaxExpectedFaults()
 

@@ -120,6 +120,17 @@ func (st *GuardianStorage) fetchPartyIdFromBytes(pk []byte) *tsscommv1.PartyId {
 	return nil
 }
 
+func (st *GuardianStorage) FetchCertificate(pid *tsscommv1.PartyId) (*x509.Certificate, error) {
+	id := protoToPartyId(pid)
+	for i, v := range st.Guardians {
+		if equalPartyIds(id, v) {
+			return st.guardiansCerts[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("partyID certificate not found: %v", id)
+}
+
 // FetchPartyId implements ReliableTSS.
 func (st *GuardianStorage) FetchPartyId(cert *x509.Certificate) (*tsscommv1.PartyId, error) {
 
@@ -289,7 +300,7 @@ func (t *Engine) fpListener() {
 			return
 
 		case m := <-t.fpOutChan:
-			tssMsg, err := t.intoGossipMessage(m)
+			tssMsg, err := t.intoNetworkMessage(m)
 			if err == nil {
 				t.messageOutChan <- tssMsg
 				continue
@@ -336,7 +347,7 @@ func (t *Engine) cleanup() {
 		}
 	}
 }
-func (t *Engine) intoGossipMessage(m tss.Message) (*tsscommv1.PropagatedMessage, error) {
+func (t *Engine) intoNetworkMessage(m tss.Message) (*tsscommv1.PropagatedMessage, error) {
 	bts, routing, err := m.WireBytes()
 	if err != nil {
 		return nil, err
@@ -352,32 +363,31 @@ func (t *Engine) intoGossipMessage(m tss.Message) (*tsscommv1.PropagatedMessage,
 		Sender:          partyIdToProto(m.GetFrom()),
 		Recipients:      indices,
 		MsgSerialNumber: atomic.AddUint64(&t.msgSerialNumber, 1),
-		Authentication:  nil,
+		Signature:       nil, // required only in case of broadcast (Echo message)
 	}
 
-	tssMsg := &tsscommv1.PropagatedMessage{} // TODO: Once we use dedicated connections, we can remove this wrapper message.
+	if err := t.sign(msgToSend); err != nil { // TODO: not always needed
+		return nil, err
+	}
+
+	tssMsg := &tsscommv1.PropagatedMessage{}
 
 	if routing.IsBroadcast || len(routing.To) == 0 || len(routing.To) > 1 {
-		t.sign(msgToSend)
+
 		echo := &tsscommv1.PropagatedMessage_Echo{
 			Echo: &tsscommv1.Echo{
 				Message: msgToSend,
-				// TODO: Once we use two-way-TLS, we can remove this field
-				// (just ensure we receive the message from the correct grpc stream).
-				Signature: nil,
-				Echoer:    partyIdToProto(m.GetFrom()),
+				Echoer:  partyIdToProto(m.GetFrom()),
 			},
 		}
 
-		if err := t.signEcho(echo.Echo); err != nil {
+		if err := t.setEchoerField(echo.Echo); err != nil {
 			return nil, err
 		}
 
 		tssMsg.Payload = echo
 
 	} else {
-		// TODO: remove this since we plan on using two-way-TLS connections.
-		t.encryptAndMac(msgToSend)
 		tssMsg.Payload = &tsscommv1.PropagatedMessage_Unicast{
 			Unicast: msgToSend,
 		}
@@ -417,8 +427,12 @@ func (t *Engine) HandleIncomingTssMessage(msg *tsscommv1.PropagatedMessage) {
 }
 
 func (t *Engine) sendEchoOut(m *tsscommv1.PropagatedMessage_Echo) error {
-	echo, _ := proto.Clone(m.Echo).(*tsscommv1.Echo)
-	if err := t.signEcho(echo); err != nil {
+	echo, ok := proto.Clone(m.Echo).(*tsscommv1.Echo)
+	if !ok {
+		return fmt.Errorf("failed to clone echo message")
+	}
+
+	if err := t.setEchoerField(echo); err != nil {
 		return err
 	}
 
@@ -584,7 +598,7 @@ func (t *Engine) parseEcho(m *tsscommv1.PropagatedMessage_Echo) (tss.ParsedMessa
 
 	senderPid := protoToPartyId(echoMsg.Message.Sender)
 	if !t.GuardianStorage.contains(senderPid) {
-		return nil, ErrUnkownSender
+		return nil, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
 	}
 
 	return tss.ParseWireMessage(echoMsg.Message.Payload, senderPid, true)
