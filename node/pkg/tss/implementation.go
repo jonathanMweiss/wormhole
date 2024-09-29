@@ -632,7 +632,8 @@ func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
 	return tss.ParseWireMessage(echoMsg.Message.Content.Payload, senderPid, true)
 }
 
-// SECURITY NOTE: this function ensure no equivocation.
+// SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.
+//
 // We don't add the content of the message to the uuid, othewrwise we won't be able to detect equivocations.
 func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 	d := append([]byte("tssMsgUUID:"), t.GuardianStorage.LoadDistributionKey...)
