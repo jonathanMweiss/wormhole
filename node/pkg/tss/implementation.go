@@ -549,7 +549,12 @@ func (t *Engine) handleUnicast(m Incoming) error {
 		}
 	}
 
-	if err := t.validateUnicastDoesntExist(parsed); err != nil {
+	err = t.validateUnicastDoesntExist(parsed)
+	if err == errUnicastAlreadyReceived {
+		return nil
+	}
+
+	if err != nil {
 		return logableError{
 			fmt.Errorf("failed to ensure no equivication present in unicast: %w", err),
 			parsed.WireMsg().GetTrackingID(),
@@ -568,23 +573,34 @@ func (t *Engine) handleUnicast(m Incoming) error {
 	return nil
 }
 
+var errUnicastAlreadyReceived = fmt.Errorf("unicast already received")
+
 func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 	id, err := t.getMessageUUID(parsed)
 	if err != nil {
 		return err
 	}
 
+	bts, _, err := parsed.WireBytes()
+	if err != nil {
+		return fmt.Errorf("failed storing the unicast: %w", err)
+	}
+	msgDigest := hash(bts)
+
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
-	if _, ok := t.received[id]; ok {
-		return ErrEquivicatingGuardian
+	if stored, ok := t.received[id]; ok {
+		if stored.messageDigest != msgDigest {
+			return ErrEquivicatingGuardian
+		}
+
+		return errUnicastAlreadyReceived
 	}
 
 	t.received[id] = &broadcaststate{
 		timeReceived:  time.Now(), // used for GC.
-		message:       nil,        // no need to store the content.
-		messageDigest: digest{},   // no need to check content, since we never accept another.
+		messageDigest: hash(bts),  // used to ensure no equivocation.
 		votes:         nil,        // no votes should be stored for a unicast.
 		echoedAlready: true,       // ensuring this never echoed since it is a unicast.
 		mtx:           nil,        // no need to lock this, just store it.

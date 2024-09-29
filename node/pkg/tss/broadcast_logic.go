@@ -17,7 +17,6 @@ type voterId string
 type broadcaststate struct {
 	// The following three fields should not be changed after creation of broadcaststate:
 	timeReceived  time.Time
-	message       *tsscommv1.SignedMessage
 	messageDigest digest
 
 	votes map[voterId]bool
@@ -111,7 +110,6 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 
 		state = &broadcaststate{
 			timeReceived:     time.Now(),
-			message:          signed,
 			messageDigest:    hashSignedMessage(signed),
 			votes:            make(map[voterId]bool),
 			echoedAlready:    false,
