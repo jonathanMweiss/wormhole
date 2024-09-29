@@ -80,7 +80,6 @@ func partyIdToProto(pid *tss.PartyID) *tsscommv1.PartyId {
 
 var (
 	ErrEchoIsNil             = fmt.Errorf("echo is nil")
-	ErrNoEchoSignature       = fmt.Errorf("echo doesn't contain a signature")
 	ErrNoAuthenticationField = fmt.Errorf("SignedMessage doesn't contain an authentication field")
 	ErrNilPartyId            = fmt.Errorf("party id is nil")
 	ErrEmptyIDInPID          = fmt.Errorf("partyId identifier is empty")
@@ -94,11 +93,20 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return ErrEchoIsNil
 	}
 
-	if err := validateSignedMessageCorrectForm(e.Message); err != nil {
-		return fmt.Errorf("echo message error:%w", err)
+	m := e.Message
+	if m == nil {
+		return ErrSignedMessageIsNil
 	}
 
-	if len(e.Message.Signature) == 0 {
+	if err := validatePartIdProtoCorrectForm(m.Sender); err != nil {
+		return fmt.Errorf("signedMessage sender pID error:%w", err)
+	}
+
+	if err := validateContentCorrectForm(m.Content); err != nil {
+		return fmt.Errorf("signedMessage content error:%w", err)
+	}
+
+	if len(m.Signature) == 0 {
 		return ErrNoAuthenticationField
 	}
 
@@ -130,25 +138,6 @@ func validateContentCorrectForm(m *tsscommv1.TssContent) error {
 	if m.Payload == nil {
 		return ErrNilPayload
 	}
-	return nil
-}
-
-func validateSignedMessageCorrectForm(m *tsscommv1.SignedMessage) error {
-	if m == nil {
-		return ErrSignedMessageIsNil
-	}
-
-	if err := validatePartIdProtoCorrectForm(m.Sender); err != nil {
-		return fmt.Errorf("signedMessage sender pID error:%w", err)
-	}
-	if err := validateContentCorrectForm(m.Content); err != nil {
-		return fmt.Errorf("signedMessage content error:%w", err)
-	}
-
-	if m.Signature == nil {
-		return ErrNoAuthenticationField
-	}
-
 	return nil
 }
 
