@@ -42,27 +42,16 @@ func logErr(l *zap.Logger, err error) {
 		return
 	}
 
-	switch {
-	case informativeErr.round != "", informativeErr.trackingId != nil:
-		l.Error(
-			informativeErr.Error(),
-			zap.String("round", string(informativeErr.round)),
-			zap.String("trackingId", fmt.Sprintf("%x", informativeErr.trackingId)),
-		)
-	case informativeErr.trackingId != nil:
-		l.Error(
-			informativeErr.Error(),
-			zap.String("trackingId", fmt.Sprintf("%x", informativeErr.trackingId)),
-		)
-	case informativeErr.round != "":
-		l.Error(
-			informativeErr.Error(),
-			zap.String("round", string(informativeErr.round)),
-		)
-	default:
-		// no additional fields
-		l.Error(informativeErr.Error())
+	var zapFields []zap.Field
+	if informativeErr.trackingId != nil {
+		zapFields = append(zapFields, zap.String("trackingId", fmt.Sprintf("%x", informativeErr.trackingId)))
 	}
+
+	if informativeErr.round != "" {
+		zapFields = append(zapFields, zap.String("round", string(informativeErr.round)))
+	}
+
+	l.Error(informativeErr.Error(), zapFields...)
 }
 
 func equalPartyIds(a, b *tss.PartyID) bool {
