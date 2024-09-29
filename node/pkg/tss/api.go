@@ -32,7 +32,9 @@ type Incoming interface {
 	toEcho() *tsscommv1.Echo
 }
 
-// ReliableMessenger is a component of tss, where it knows how to handle incoming tsscommv1.PropagatedMessage and produce output messages.
+// ReliableMessenger is a component of tss, where it knows how to handle incoming tsscommv1.PropagatedMessage,
+// it may produce messages (of type Sendable), which should be delivered to other guardians.
+// these Sendable messages are produced by the tss engine, and are needed by the other guardians to complete a TSS round.
 // In addition it supplies a server with certificates of any party member, including itself.
 type ReliableMessenger interface {
 	// HandleIncomingTssMessage receives a network message and process it using a reliable-broadcast protocol.
