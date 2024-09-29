@@ -11,12 +11,33 @@ import (
 	"github.com/yossigi/tss-lib/v2/common"
 )
 
+type message interface {
+	IsBroadcast() bool
+	GetNetworkMessage() *tsscommv1.PropagatedMessage
+}
+
+type Sendable interface {
+	message
+	GetDestinations() []*tsscommv1.PartyId
+
+	cloneSelf() Sendable // deep copy to avoid race condition in tests (ensuring no one shares the same sendable).
+}
+
+type Incoming interface {
+	message
+	IsUnicast() bool
+	GetSource() *tsscommv1.PartyId
+
+	toUnicast() *tsscommv1.TssContent
+	toEcho() *tsscommv1.Echo
+}
+
 // ReliableMessenger is a component of tss, where it knows how to handle incoming tsscommv1.PropagatedMessage and produce output messages.
 // In addition it supplies a server with certificates of any party member, including itself.
 type ReliableMessenger interface {
 	// HandleIncomingTssMessage receives a network message and process it using a reliable-broadcast protocol.
-	HandleIncomingTssMessage(msg *tsscommv1.PropagatedMessage)
-	ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage // just need to propagate this through the p2p network
+	HandleIncomingTssMessage(msg Incoming)
+	ProducedOutputMessages() <-chan Sendable // just need to propagate this through the p2p network
 
 	// Utilities for servers:
 	GetCertificate() *tls.Certificate // containing secret key.

@@ -50,18 +50,18 @@ func (s *broadcaststate) shouldDeliver(f int) bool {
 
 var ErrEquivicatingGuardian = fmt.Errorf("equivication, guardian sent two different messages for the same round and session")
 
-func (s *broadcaststate) updateState(f int, msg *tsscommv1.Echo) (shouldEcho bool, err error) {
-	isMsgSrc := equalPartyIds(protoToPartyId(msg.Echoer), protoToPartyId(msg.Message.Sender))
+func (s *broadcaststate) updateState(f int, msg *tsscommv1.SignedMessage, echoer *tsscommv1.PartyId) (shouldEcho bool, err error) {
+	isMsgSrc := equalPartyIds(protoToPartyId(echoer), protoToPartyId(msg.Sender))
 
 	// checking outside of lock since s.messageDigest is read only after creation.
-	if s.messageDigest != hashSignedMessage(msg.Message) {
-		return false, fmt.Errorf("%w: %v", ErrEquivicatingGuardian, msg.Echoer)
+	if s.messageDigest != hashSignedMessage(msg) {
+		return false, fmt.Errorf("%w: %v", ErrEquivicatingGuardian, echoer)
 	}
 
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	s.votes[voterId{id: msg.Echoer.Id, key: string(msg.Echoer.Key)}] = true // stores only validate
+	s.votes[voterId{id: echoer.Id, key: string(echoer.Key)}] = true // stores only validate
 	if s.echoedAlready {
 		return
 	}
@@ -88,37 +88,48 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 	return (st.Threshold) / 2 // this is the floor of the result.
 }
 
-func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg *tsscommv1.Echo) (shouldEcho bool, shouldDeliver bool, err error) {
+func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
 	d, err := t.getMessageUUID(parsed)
 	if err != nil {
 		return false, false, err
 	}
 
+	if echo := msg.toEcho(); echo == nil || echo.Message == nil {
+		return false, false, fmt.Errorf("expected echo, received nil")
+	}
+
+	signed := msg.toEcho().Message
+	echoer := msg.GetSource()
+
 	t.mtx.Lock()
 	state, ok := t.received[d]
+
 	if !ok {
-		if err := t.verifySignedMessage(msg.Message); err != nil {
+		if err := t.verifySignedMessage(signed); err != nil {
 			return false, false, err
 		}
 
 		state = &broadcaststate{
 			timeReceived:     time.Now(),
-			message:          msg.Message,
-			messageDigest:    hashSignedMessage(msg.Message),
+			message:          signed,
+			messageDigest:    hashSignedMessage(signed),
 			votes:            make(map[voterId]bool),
 			echoedAlready:    false,
 			alreadyDelivered: false,
 			mtx:              &sync.Mutex{},
 		}
+
 		t.received[d] = state
+
 	}
+
 	t.mtx.Unlock()
 
 	// If we weren't using TLS - at this point we would have to verify the signature of the message.
 
 	f := t.GuardianStorage.getMaxExpectedFaults()
 
-	allowedToBroadcast, err := state.updateState(f, msg)
+	allowedToBroadcast, err := state.updateState(f, signed, echoer)
 	if err != nil {
 		return false, false, err
 	}

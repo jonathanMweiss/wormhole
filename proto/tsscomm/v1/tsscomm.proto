@@ -21,38 +21,31 @@ message PartyId{
   uint32 index = 4;
 }
 
+message TssContent{
+  bytes payload = 1; 
+  uint64 msg_serial_number = 2;
+}
 
-// SignedMessage is a message containing a payload for someone specific (containing encrypted and
-// MACed payload) or as a broadcast message (plaintext but signed).
+// SignedMessage is the content of a broadcast message. It may be echoed and as a result requires a signature.
 message SignedMessage {
-  // the message itself
-  bytes payload = 1; // In case of unicast: should be encrypted with a specific DH derived shared key.
+  TssContent content = 1;
 
-  // both of the following fields are used by the TSS lib, and can be used by the reliable-broadcast protocol.
   PartyId sender = 2;
-  repeated PartyId recipients = 3;
-
-  // used to identify the number of message for this sender. starts from 0 and advances with each message this signer sends.
-  uint64 msg_serial_number = 4;
-
-  // if this message is part of reliable broadcast protocol, it should include the signature of the sender.
-  // otherwise it should contain the mac over this message.
   bytes signature = 6;
 }
 
 // Echo is a message explicitly used by the Reliable Broadcast protocol.
 message Echo {
   SignedMessage message = 1;
-
-  // Since we use Two way authentication, we know who the echoer is.
-  PartyId echoer = 3;
 }
-
+message Unicast{
+  TssContent content = 1;
+}
 // PropagatedMessage is a message that is sent across the network,
 // either to a specific recipient or all nodes (using reliable broadcast).
 message PropagatedMessage {
-  oneof payload{
-    SignedMessage Unicast = 1;
+  oneof Message{
+    Unicast Unicast = 1;
     Echo Echo = 2;
   }
 }

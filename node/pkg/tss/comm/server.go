@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
@@ -93,60 +92,35 @@ func (s *server) ensuredConnected() {
 	}
 }
 
-func (s *server) send(msg *tsscommv1.PropagatedMessage) {
-	switch msg.Payload.(type) {
-	case *tsscommv1.PropagatedMessage_Echo:
-		s.broadcast(msg)
+func (s *server) send(msg tss.Sendable) {
 
-	case *tsscommv1.PropagatedMessage_Unicast:
-		s.unicast(msg)
-	}
-}
-
-func (s *server) unicast(msg *tsscommv1.PropagatedMessage) {
-	m, ok := msg.Payload.(*tsscommv1.PropagatedMessage_Unicast)
-	if !ok {
-		return // shouldn't happen.
+	destinations := msg.GetDestinations()
+	if msg.IsBroadcast() {
+		destinations = s.peers // taking everyone the server knows about.
 	}
 
-	for _, recipient := range m.Unicast.Recipients {
+	for _, recipient := range destinations {
 		hostname := recipient.Id
-
-		conn, ok := s.connections[recipient.Id]
+		conn, ok := s.connections[hostname]
 		if !ok {
 			s.enqueueRedialRequest(hostname)
 
-			s.logger.Error(
-				"received unknown recipient",
+			s.logger.Warn(
+				"Couldn't send message to peer. No connection found.",
 				zap.String("hostname", recipient.Id),
 			)
 
 			continue
 		}
 
-		if err := conn.stream.Send(msg); err != nil {
+		if err := conn.stream.Send(msg.GetNetworkMessage()); err != nil {
 			delete(s.connections, hostname)
 			s.enqueueRedialRequest(hostname)
 
-			s.logger.Warn(
-				"couldn't send message to peer.",
+			s.logger.Error(
+				"couldn't send message to peer due to error.",
+				zap.Error(err),
 				zap.String("hostname", recipient.Id),
-				zap.Error(err),
-			)
-		}
-	}
-}
-
-func (s *server) broadcast(msg *tsscommv1.PropagatedMessage) {
-	for id, conn := range s.connections {
-		if err := conn.stream.Send(msg); err != nil {
-			delete(s.connections, id)
-			s.enqueueRedialRequest(id)
-
-			s.logger.Warn(
-				"couldn't send broadcast message to peer.",
-				zap.String("hostname", id),
-				zap.Error(err),
 			)
 		}
 	}
@@ -271,23 +245,9 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 			return err
 		}
 
-		// (SECURITY measure): ensuring received message has the ID of the correct sender.
-		overwriteSenderID(m, clientId)
-		s.tssMessenger.HandleIncomingTssMessage(m)
+		s.tssMessenger.HandleIncomingTssMessage(&tss.IncomingMessage{
+			Source:  clientId,
+			Content: m,
+		})
 	}
-}
-
-func overwriteSenderID(m *tsscommv1.PropagatedMessage, clientId *tsscommv1.PartyId) {
-	switch v := m.Payload.(type) {
-	case *tsscommv1.PropagatedMessage_Echo:
-		overwritePartyId(v.Echo.Echoer, clientId)
-	case *tsscommv1.PropagatedMessage_Unicast:
-		overwritePartyId(v.Unicast.Sender, clientId)
-	}
-}
-
-func overwritePartyId(curr *tsscommv1.PartyId, overwritingId *tsscommv1.PartyId) {
-	curr.Id = strings.Clone(overwritingId.Id)
-	curr.Key = make([]byte, len(overwritingId.Key))
-	copy(curr.Key, overwritingId.Key)
 }

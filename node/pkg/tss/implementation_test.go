@@ -34,24 +34,31 @@ var (
 	allRounds = append(unicastRounds, broadcastRounds...)
 )
 
-func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *tsscommv1.Echo {
+func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *IncomingMessage {
 	payload, _, err := parsed.WireBytes()
 	a.NoError(err)
 
-	echo1 := &tsscommv1.Echo{
+	msg := &tsscommv1.Echo{
 		Message: &tsscommv1.SignedMessage{
-			Payload:         payload,
-			Sender:          partyIdToProto(t.Self),
-			Recipients:      nil,
-			MsgSerialNumber: 0,
-			Signature:       nil,
+			Content:   &tsscommv1.TssContent{Payload: payload},
+			Sender:    partyIdToProto(t.Self),
+			Signature: nil,
 		},
-		Echoer: &tsscommv1.PartyId{},
 	}
-	a.NoError(t.sign(echo1.Message))
-	a.NoError(t.setEchoerField(echo1))
+	a.NoError(t.sign(msg.Message))
 
-	return echo1
+	return &IncomingMessage{
+		Source: partyIdToProto(t.Self),
+		Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{
+				Echo: msg,
+			},
+		},
+	}
+}
+
+func (i *IncomingMessage) setSource(id *tss.PartyID) {
+	i.Source = partyIdToProto(id)
 }
 
 func TestBroadcast(t *testing.T) {
@@ -86,14 +93,14 @@ func TestBroadcast(t *testing.T) {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.setEchoerField(echo))
+			echo.setSource(e2.Self)
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.setEchoerField(echo))
+			echo.setSource(e3.Self)
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -115,21 +122,21 @@ func TestDeliver(t *testing.T) {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.setEchoerField(echo))
+			echo.setSource(e2.Self)
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.setEchoerField(echo))
+			echo.setSource(e3.Self)
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e1.setEchoerField(echo))
+			echo.setSource(e1.Self)
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -148,28 +155,28 @@ func TestDeliver(t *testing.T) {
 		for j, rnd := range allRounds {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 			echo := parsedIntoEcho(a, e1, parsed1)
-			a.NoError(e2.setEchoerField(echo))
+			echo.setSource(e2.Self)
 
 			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e3.setEchoerField(echo))
+			echo.setSource(e3.Self)
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
-			a.NoError(e1.setEchoerField(echo))
+			echo.setSource(e1.Self)
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.True(shouldDeliver)
 
-			a.NoError(e4.setEchoerField(echo))
+			echo.setSource(e4.Self)
 
 			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, echo)
 			a.NoError(err)
@@ -239,21 +246,28 @@ func TestEquivocation(t *testing.T) {
 
 			bts, _, err := parsed1.WireBytes()
 			a.NoError(err)
-			msg := &tsscommv1.PropagatedMessage_Unicast{
-				Unicast: &tsscommv1.SignedMessage{
-					Payload:         bts,
-					Sender:          partyIdToProto(e1.Self),
-					Recipients:      []*tsscommv1.PartyId{partyIdToProto(e2.Self)},
-					MsgSerialNumber: 0,
-					Signature:       nil,
+
+			msg := &IncomingMessage{
+				Content: &tsscommv1.PropagatedMessage{
+					Message: &tsscommv1.PropagatedMessage_Unicast{
+						Unicast: &tsscommv1.Unicast{
+							Content: &tsscommv1.TssContent{
+								Payload:         bts,
+								MsgSerialNumber: 0,
+							},
+						},
+					},
 				},
 			}
+
+			msg.setSource(e1.Self)
 
 			e2.handleUnicast(msg)
 
 			bts, _, err = parsed2.WireBytes()
 			a.NoError(err)
-			msg.Unicast.Payload = bts
+
+			msg.Content.Message.(*tsscommv1.PropagatedMessage_Unicast).Unicast.Content.Payload = bts
 			a.ErrorIs(e2.handleUnicast(msg), ErrEquivicatingGuardian)
 		}
 	})
@@ -312,16 +326,14 @@ func TestMessagesWithBadRounds(t *testing.T) {
 			bts, _, err := parsed.WireBytes()
 			a.NoError(err)
 
-			m := &tsscommv1.PropagatedMessage_Unicast{
-				Unicast: &tsscommv1.SignedMessage{
-					Payload:         bts,
-					Sender:          partyIdToProto(from),
-					Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
-					MsgSerialNumber: 0,
-					Signature:       nil,
-				},
+			m := &IncomingMessage{
+				Source: partyIdToProto(from),
+				Content: &tsscommv1.PropagatedMessage{Message: &tsscommv1.PropagatedMessage_Unicast{
+					Unicast: &tsscommv1.Unicast{
+						Content: &tsscommv1.TssContent{Payload: bts},
+					},
+				}},
 			}
-			a.NoError(e1.sign(m.Unicast))
 			err = e2.handleUnicast(m)
 			a.ErrorIs(err, errUnicastBadRound)
 		}
@@ -334,19 +346,20 @@ func TestMessagesWithBadRounds(t *testing.T) {
 			bts, _, err := parsed.WireBytes()
 			a.NoError(err)
 
-			m := &tsscommv1.PropagatedMessage_Echo{
-				Echo: &tsscommv1.Echo{
-					Message: &tsscommv1.SignedMessage{
-						Payload:         bts,
-						Sender:          partyIdToProto(from),
-						Recipients:      []*tsscommv1.PartyId{partyIdToProto(to)},
-						MsgSerialNumber: 0,
-						Signature:       nil,
+			m := &IncomingMessage{
+				Source: partyIdToProto(from),
+				Content: &tsscommv1.PropagatedMessage{Message: &tsscommv1.PropagatedMessage_Echo{
+					Echo: &tsscommv1.Echo{
+						Message: &tsscommv1.SignedMessage{
+							Content:   &tsscommv1.TssContent{Payload: bts},
+							Sender:    partyIdToProto(from),
+							Signature: nil,
+						},
 					},
-					Echoer: partyIdToProto(from),
-				},
+				}},
 			}
-			a.NoError(e1.sign(m.Echo.Message))
+			a.NoError(e1.sign(m.Content.GetEcho().Message))
+
 			_, err = e2.handleEcho(m)
 			a.ErrorIs(err, errBadRoundsInEcho)
 		}
@@ -442,6 +455,11 @@ func loadGuardians(a *assert.Assertions) []*Engine {
 	return engines
 }
 
+type msgg struct {
+	Sender *tsscommv1.PartyId
+	Sendable
+}
+
 func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 	signalSuccess := make(chan struct{})
 	once := sync.Once{}
@@ -450,13 +468,13 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 		wg := sync.WaitGroup{}
 		wg.Add(len(engines) * 2)
 
-		chns := make([]chan *tsscommv1.PropagatedMessage, len(engines))
-		for i := range chns {
-			chns[i] = make(chan *tsscommv1.PropagatedMessage, 10000)
+		chns := make(map[string]chan msgg, len(engines))
+		for _, en := range engines {
+			chns[en.Self.Id] = make(chan msgg, 10000)
 		}
 
-		for i, e := range engines {
-			i, engine := i, e
+		for _, e := range engines {
+			engine := e
 
 			// need a separate goroutine for handling engine output and engine input.
 			// simulating network stream incoming and network stream outgoing.
@@ -470,8 +488,11 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						return
 					case <-signalSuccess:
 						return
-					case msg := <-chns[i]:
-						engine.HandleIncomingTssMessage(msg)
+					case msg := <-chns[engine.Self.Id]:
+						engine.HandleIncomingTssMessage(&IncomingMessage{
+							Source:  msg.Sender,
+							Content: msg.GetNetworkMessage(),
+						})
 					}
 				}
 			}()
@@ -484,9 +505,11 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 					case <-ctx.Done():
 						return
 					case m := <-engine.ProducedOutputMessages():
-						for _, feedChn := range chns { // treating everything as broadcast for ease of use.
-							feedChn <- m
+						if m.IsBroadcast() {
+							broadcast(chns, engine, m)
+							continue
 						}
+						unicast(m, chns, engine)
 					case <-engine.ProducedSignature():
 						once.Do(func() { close(signalSuccess) })
 						return // TODO verify signature.
@@ -501,4 +524,24 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 	}()
 
 	return signalSuccess
+}
+
+func unicast(m Sendable, chns map[string]chan msgg, engine *Engine) {
+	pids := m.GetDestinations()
+	for _, pid := range pids {
+		feedChn := chns[pid.Id]
+		feedChn <- msgg{
+			Sender:   partyIdToProto(engine.Self),
+			Sendable: m.cloneSelf(),
+		}
+	}
+}
+
+func broadcast(chns map[string]chan msgg, engine *Engine, m Sendable) {
+	for _, feedChn := range chns {
+		feedChn <- msgg{
+			Sender:   partyIdToProto(engine.Self),
+			Sendable: m.cloneSelf(),
+		}
+	}
 }

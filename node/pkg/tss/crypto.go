@@ -24,15 +24,15 @@ func hash(msg []byte) digest {
 // or it isn't canonical - as stated in proto.MarshalOptions docs.
 
 func hashSignedMessage(msg *tsscommv1.SignedMessage) digest {
-	b := bytes.NewBuffer(nil)
-	b.Write(msg.Payload)
-	writePartyID(b, msg.Sender)
-
-	for _, r := range msg.Recipients {
-		writePartyID(b, r)
+	if msg == nil {
+		return digest{}
 	}
 
-	vaa.MustWrite(b, binary.BigEndian, msg.MsgSerialNumber)
+	b := bytes.NewBuffer(nil)
+	b.Write(msg.Content.Payload)
+	vaa.MustWrite(b, binary.BigEndian, msg.Content.MsgSerialNumber)
+	writePartyID(b, msg.Sender)
+
 	return hash(b.Bytes())
 }
 
@@ -54,16 +54,15 @@ func (t *Engine) sign(msg *tsscommv1.SignedMessage) error {
 	return err
 }
 
-func (t *Engine) setEchoerField(msg *tsscommv1.Echo) error {
-	msg.Echoer = partyIdToProto(t.Self)
-	return nil
-}
-
 var ErrInvalidSignature = fmt.Errorf("invalid signature")
 
 var errEMptySignature = fmt.Errorf("empty signature")
 
 func (st *GuardianStorage) verifySignedMessage(msg *tsscommv1.SignedMessage) error {
+	if msg == nil {
+		return fmt.Errorf("nil signed message")
+	}
+
 	if msg.Signature == nil {
 		return errEMptySignature
 	}

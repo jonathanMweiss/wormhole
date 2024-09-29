@@ -105,10 +105,6 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return ErrEchoIsNil
 	}
 
-	if err := validatePartIdProtoCorrectForm(e.Echoer); err != nil {
-		return err
-	}
-
 	if err := validateSignedMessageCorrectForm(e.Message); err != nil {
 		return fmt.Errorf("echo message error:%w", err)
 	}
@@ -137,6 +133,17 @@ func validatePartIdProtoCorrectForm(p *tsscommv1.PartyId) error {
 
 }
 
+func validateContentCorrectForm(m *tsscommv1.TssContent) error {
+	if m == nil {
+		return ErrNilPayload
+	}
+
+	if m.Payload == nil {
+		return ErrNilPayload
+	}
+	return nil
+}
+
 func validateSignedMessageCorrectForm(m *tsscommv1.SignedMessage) error {
 	if m == nil {
 		return ErrSignedMessageIsNil
@@ -145,18 +152,14 @@ func validateSignedMessageCorrectForm(m *tsscommv1.SignedMessage) error {
 	if err := validatePartIdProtoCorrectForm(m.Sender); err != nil {
 		return fmt.Errorf("signedMessage sender pID error:%w", err)
 	}
-
-	if m.Payload == nil {
-		return ErrNilPayload
+	if err := validateContentCorrectForm(m.Content); err != nil {
+		return fmt.Errorf("signedMessage content error:%w", err)
 	}
 
-	for _, v := range m.Recipients {
-		if err := validatePartIdProtoCorrectForm(v); err != nil {
-			return err
-		}
+	if m.Signature == nil {
+		return ErrNoAuthenticationField
 	}
 
-	// not checking the signature, since it is allowed to be nil in unicast.
 	return nil
 }
 

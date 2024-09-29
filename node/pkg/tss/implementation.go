@@ -38,7 +38,7 @@ type Engine struct {
 
 	fpOutChan      chan tss.Message
 	fpSigOutChan   chan *common.SignatureData
-	messageOutChan chan *tsscommv1.PropagatedMessage
+	messageOutChan chan Sendable
 	fpErrChannel   chan *tss.Error // used to log issues from the FullParty.
 
 	started         atomic.Uint32
@@ -106,7 +106,7 @@ func (t *Engine) ProducedSignature() <-chan *common.SignatureData {
 }
 
 // ProducedOutputMessages ensures a listener can send the output messages to the network.
-func (t *Engine) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
+func (t *Engine) ProducedOutputMessages() <-chan Sendable {
 	return t.messageOutChan
 }
 
@@ -230,7 +230,7 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		fpOutChan:       fpOutChan,
 		fpSigOutChan:    fpSigOutChan,
 		fpErrChannel:    fpErrChannel,
-		messageOutChan:  make(chan *tsscommv1.PropagatedMessage),
+		messageOutChan:  make(chan Sendable),
 		msgSerialNumber: 0,
 		mtx:             &sync.Mutex{},
 		received:        map[digest]*broadcaststate{},
@@ -300,7 +300,7 @@ func (t *Engine) fpListener() {
 			return
 
 		case m := <-t.fpOutChan:
-			tssMsg, err := t.intoNetworkMessage(m)
+			tssMsg, err := t.intoSendable(m)
 			if err == nil {
 				t.messageOutChan <- tssMsg
 				continue
@@ -347,103 +347,98 @@ func (t *Engine) cleanup() {
 		}
 	}
 }
-func (t *Engine) intoNetworkMessage(m tss.Message) (*tsscommv1.PropagatedMessage, error) {
+func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 	bts, routing, err := m.WireBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
-	for _, pId := range routing.To {
-		indices = append(indices, partyIdToProto(pId))
-	}
-
-	msgToSend := &tsscommv1.SignedMessage{
+	content := &tsscommv1.TssContent{
 		Payload:         bts,
-		Sender:          partyIdToProto(m.GetFrom()),
-		Recipients:      indices,
 		MsgSerialNumber: atomic.AddUint64(&t.msgSerialNumber, 1),
-		Signature:       nil, // required only in case of broadcast (Echo message)
 	}
 
-	if err := t.sign(msgToSend); err != nil { // TODO: not always needed
-		return nil, err
-	}
-
-	tssMsg := &tsscommv1.PropagatedMessage{}
-
-	if routing.IsBroadcast || len(routing.To) == 0 || len(routing.To) > 1 {
-
-		echo := &tsscommv1.PropagatedMessage_Echo{
-			Echo: &tsscommv1.Echo{
-				Message: msgToSend,
-				Echoer:  partyIdToProto(m.GetFrom()),
-			},
+	var sendable Sendable
+	if routing.IsBroadcast || len(routing.To) == 0 {
+		msgToSend := &tsscommv1.SignedMessage{
+			Content:   content,
+			Sender:    partyIdToProto(t.Self),
+			Signature: nil,
 		}
 
-		if err := t.setEchoerField(echo.Echo); err != nil {
+		if err := t.sign(msgToSend); err != nil { // TODO: not always needed
 			return nil, err
 		}
-
-		tssMsg.Payload = echo
+		sendable = &Echo{
+			Echo: &tsscommv1.Echo{Message: msgToSend},
+		}
 
 	} else {
-		tssMsg.Payload = &tsscommv1.PropagatedMessage_Unicast{
-			Unicast: msgToSend,
+		indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
+		for _, pId := range routing.To {
+			indices = append(indices, partyIdToProto(pId))
+		}
+
+		sendable = &Unicast{
+			Unicast:     content,
+			Receipients: indices,
 		}
 	}
 
-	return tssMsg, nil
+	return sendable, nil
 }
 
-func (t *Engine) HandleIncomingTssMessage(msg *tsscommv1.PropagatedMessage) {
+func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
 	if t == nil {
 		return
 	}
 
-	switch m := msg.Payload.(type) {
-	case *tsscommv1.PropagatedMessage_Unicast:
-		if err := t.handleUnicast(m); err != nil {
-			logErr(t.logger, err)
-			return
-		}
+	if msg == nil {
+		return
+	}
 
-	case *tsscommv1.PropagatedMessage_Echo:
-		shouldEcho, err := t.handleEcho(m)
-		if err != nil {
-			logErr(t.logger, err)
-			return
-		}
+	if msg.GetSource() == nil {
+		t.logger.Error("No source in incoming message", zap.Any("msg", msg)) // shouldn't happen.
+		return
+	}
 
-		if !shouldEcho {
-			return
-		}
-
-		if err := t.sendEchoOut(m); err != nil {
+	if msg.IsUnicast() {
+		if err := t.handleUnicast(msg); err != nil {
 			logErr(t.logger, err)
-			return
+
 		}
+		return
+	} else if !msg.IsBroadcast() {
+		t.logger.Error("received incoming message which is neither broadcast nor unicast", zap.Any("msg", msg))
+		return
+	}
+
+	shouldEcho, err := t.handleEcho(msg)
+	if err != nil {
+		logErr(t.logger, err)
+		return
+	}
+
+	if !shouldEcho {
+		return
+	}
+
+	if err := t.sendEchoOut(msg); err != nil {
+		logErr(t.logger, err)
+		return
 	}
 }
 
-func (t *Engine) sendEchoOut(m *tsscommv1.PropagatedMessage_Echo) error {
-	echo, ok := proto.Clone(m.Echo).(*tsscommv1.Echo)
+func (t *Engine) sendEchoOut(m Incoming) error {
+	content, ok := proto.Clone(m.toEcho()).(*tsscommv1.Echo)
 	if !ok {
 		return fmt.Errorf("failed to clone echo message")
-	}
-
-	if err := t.setEchoerField(echo); err != nil {
-		return err
 	}
 
 	select {
 	case <-t.ctx.Done():
 		return t.ctx.Err()
-	case t.messageOutChan <- &tsscommv1.PropagatedMessage{
-		Payload: &tsscommv1.PropagatedMessage_Echo{
-			Echo: echo,
-		},
-	}:
+	case t.messageOutChan <- &Echo{Echo: content}:
 	}
 
 	return nil
@@ -451,7 +446,7 @@ func (t *Engine) sendEchoOut(m *tsscommv1.PropagatedMessage_Echo) error {
 
 var errBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
 
-func (t *Engine) handleEcho(m *tsscommv1.PropagatedMessage_Echo) (bool, error) {
+func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	parsed, err := t.parseEcho(m)
 	if err != nil {
 		return false,
@@ -481,7 +476,7 @@ func (t *Engine) handleEcho(m *tsscommv1.PropagatedMessage_Echo) (bool, error) {
 			}
 	}
 
-	shouldEcho, shouldDeliver, err := t.relbroadcastInspection(parsed, m.Echo)
+	shouldEcho, shouldDeliver, err := t.relbroadcastInspection(parsed, m)
 	if err != nil {
 		return false,
 			logableError{
@@ -508,14 +503,19 @@ func (t *Engine) handleEcho(m *tsscommv1.PropagatedMessage_Echo) (bool, error) {
 
 var errUnicastBadRound = fmt.Errorf("bad round for unicast (can accept round1Message1 and round2Message)")
 
-func (t *Engine) handleUnicast(m *tsscommv1.PropagatedMessage_Unicast) error {
+func (t *Engine) handleUnicast(m Incoming) error {
 	parsed, err := t.parseUnicast(m)
 	if err != nil {
-		if err == errUnicastNotForMe {
-			return nil
-		}
-
 		return logableError{fmt.Errorf("couldn't parse unicast payload: %w", err), nil, ""}
+	}
+
+	// ensuring the reported source of the message matches the claimed source. (parsed.GetFrom() used by the tss-lib)
+	if !equalPartyIds(parsed.GetFrom(), protoToPartyId(m.GetSource())) {
+		return logableError{
+			fmt.Errorf("parsed message sender doesn't match the source of the message"),
+			parsed.WireMsg().GetTrackingID(),
+			"",
+		}
 	}
 
 	rnd, err := getRound(parsed)
@@ -542,7 +542,6 @@ func (t *Engine) handleUnicast(m *tsscommv1.PropagatedMessage_Unicast) error {
 			parsed.WireMsg().GetTrackingID(),
 			rnd,
 		}
-
 	}
 
 	if err := t.fp.Update(parsed); err != nil {
@@ -585,15 +584,14 @@ var (
 	ErrUnkownSender = fmt.Errorf("sender is not a known guardian")
 )
 
-func (t *Engine) parseEcho(m *tsscommv1.PropagatedMessage_Echo) (tss.ParsedMessage, error) {
-	echoMsg := m.Echo
+func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
+	echoMsg := m.toEcho()
+	if echoMsg == nil {
+		return nil, fmt.Errorf("incoming echo message is nil")
+	}
 
 	if err := vaidateEchoCorrectForm(echoMsg); err != nil {
 		return nil, err
-	}
-
-	if !t.GuardianStorage.contains(protoToPartyId(echoMsg.Echoer)) {
-		return nil, ErrUnkownEchoer
 	}
 
 	senderPid := protoToPartyId(echoMsg.Message.Sender)
@@ -601,7 +599,7 @@ func (t *Engine) parseEcho(m *tsscommv1.PropagatedMessage_Echo) (tss.ParsedMessa
 		return nil, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
 	}
 
-	return tss.ParseWireMessage(echoMsg.Message.Payload, senderPid, true)
+	return tss.ParseWireMessage(echoMsg.Message.Content.Payload, senderPid, true)
 }
 
 // SECURITY NOTE: this function ensure no equivocation.
@@ -633,33 +631,10 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 
 }
 
-var errUnicastNotForMe = fmt.Errorf("unicast message is not for me")
-
-func (t *Engine) parseUnicast(m *tsscommv1.PropagatedMessage_Unicast) (tss.ParsedMessage, error) {
-	msg := m.Unicast
-
-	if err := validateSignedMessageCorrectForm(msg); err != nil {
+func (t *Engine) parseUnicast(m Incoming) (tss.ParsedMessage, error) {
+	if err := validateContentCorrectForm(m.toUnicast()); err != nil {
 		return nil, err
 	}
 
-	if !t.isUnicastForMe(msg) {
-		return nil, errUnicastNotForMe
-	}
-
-	senderPid := protoToPartyId(msg.Sender)
-	if !t.GuardianStorage.contains(senderPid) {
-		return nil, ErrUnkownSender
-	}
-
-	return tss.ParseWireMessage(msg.Payload, senderPid, false)
-}
-
-func (t *Engine) isUnicastForMe(msg *tsscommv1.SignedMessage) bool {
-	for _, v := range msg.Recipients {
-		if equalPartyIds(protoToPartyId(v), t.Self) {
-			return true
-		}
-	}
-
-	return false
+	return tss.ParseWireMessage(m.toUnicast().Payload, protoToPartyId(m.GetSource()), false)
 }

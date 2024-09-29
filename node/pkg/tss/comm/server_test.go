@@ -24,7 +24,7 @@ import (
 const workingServerSock = "127.0.0.1:5933"
 
 type mockTssMessageHandler struct {
-	chn              chan *tsscommv1.PropagatedMessage
+	chn              chan tss.Sendable
 	selfCert         *tls.Certificate
 	peersToConnectTo []*x509.Certificate
 	peerId           *tsscommv1.PartyId
@@ -35,10 +35,10 @@ func (m *mockTssMessageHandler) GetPeers() []*x509.Certificate    { return m.pee
 func (m *mockTssMessageHandler) FetchPartyId(*x509.Certificate) (*tsscommv1.PartyId, error) {
 	return m.peerId, nil
 }
-func (m *mockTssMessageHandler) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
+func (m *mockTssMessageHandler) ProducedOutputMessages() <-chan tss.Sendable {
 	return m.chn
 }
-func (m *mockTssMessageHandler) HandleIncomingTssMessage(msg *tsscommv1.PropagatedMessage) {}
+func (m *mockTssMessageHandler) HandleIncomingTssMessage(msg tss.Incoming) {}
 
 // wraps regular server and changes its Send function.
 type testServer struct {
@@ -103,7 +103,7 @@ func TestTLSConnectAndRedial(t *testing.T) {
 	serverCert, err := internal.PemToCert(PEMCert)
 	a.NoError(err)
 
-	msgChan := make(chan *tsscommv1.PropagatedMessage)
+	msgChan := make(chan tss.Sendable)
 	srvr, err := NewServer("localhost:5930", supervisor.Logger(ctx), &mockTssMessageHandler{
 		chn:              msgChan,
 		selfCert:         en[1].GetCertificate(),
@@ -121,20 +121,10 @@ func TestTLSConnectAndRedial(t *testing.T) {
 	time.Sleep(time.Second)
 
 	//should cause disconnect
-	msgChan <- &tsscommv1.PropagatedMessage{
-		Payload: &tsscommv1.PropagatedMessage_Echo{},
-	}
+	msgChan <- &tss.Echo{}
 	time.Sleep(time.Second * 2)
 
-	msgChan <- &tsscommv1.PropagatedMessage{
-		Payload: &tsscommv1.PropagatedMessage_Unicast{
-			Unicast: &tsscommv1.SignedMessage{Recipients: []*tsscommv1.PartyId{
-				{
-					Id: workingServerSock,
-				},
-			}},
-		},
-	}
+	msgChan <- &tss.Unicast{}
 
 	select {
 	case <-ctx.Done():
@@ -156,7 +146,7 @@ func TestRelentlessReconnections(t *testing.T) {
 	serverCert, err := internal.PemToCert(PEMCert)
 	a.NoError(err)
 
-	msgChan := make(chan *tsscommv1.PropagatedMessage)
+	msgChan := make(chan tss.Sendable)
 	srvr, err := NewServer("localhost:5930", supervisor.Logger(ctx), &mockTssMessageHandler{
 		chn:              msgChan,
 		selfCert:         en[1].GetCertificate(),
@@ -200,14 +190,9 @@ func TestRelentlessReconnections(t *testing.T) {
 	go gserver.Serve(listener)
 
 	for i := 0; i < 10; i++ {
-		msgChan <- &tsscommv1.PropagatedMessage{
-			Payload: &tsscommv1.PropagatedMessage_Unicast{
-				Unicast: &tsscommv1.SignedMessage{Recipients: []*tsscommv1.PartyId{
-					{
-						Id: workingServerSock,
-					},
-				}},
-			},
+		msgChan <- &tss.Unicast{
+			Unicast:     &tsscommv1.TssContent{},
+			Receipients: []*tsscommv1.PartyId{{Id: workingServerSock}},
 		}
 
 		select {
@@ -225,10 +210,10 @@ func TestRelentlessReconnections(t *testing.T) {
 
 type tssMockJustForMessageGeneration struct {
 	tss.ReliableMessenger
-	chn chan *tsscommv1.PropagatedMessage
+	chn chan tss.Sendable
 }
 
-func (m *tssMockJustForMessageGeneration) ProducedOutputMessages() <-chan *tsscommv1.PropagatedMessage {
+func (m *tssMockJustForMessageGeneration) ProducedOutputMessages() <-chan tss.Sendable {
 	return m.chn
 }
 func TestNonBlockedBroadcast(t *testing.T) {
@@ -287,7 +272,7 @@ func TestNonBlockedBroadcast(t *testing.T) {
 
 	}
 
-	msgChan := make(chan *tsscommv1.PropagatedMessage)
+	msgChan := make(chan tss.Sendable)
 	srvr, err := NewServer("localhost:5930", supervisor.Logger(ctx), &tssMockJustForMessageGeneration{
 		ReliableMessenger: en[2],
 		chn:               msgChan,
@@ -302,9 +287,7 @@ func TestNonBlockedBroadcast(t *testing.T) {
 
 	numDones := 0
 	for i := 0; i < 10; i++ {
-		msgChan <- &tsscommv1.PropagatedMessage{
-			Payload: &tsscommv1.PropagatedMessage_Echo{},
-		}
+		msgChan <- &tss.Echo{}
 
 		select {
 		case <-ctx.Done():
