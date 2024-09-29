@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -648,4 +649,51 @@ func (t *Engine) parseUnicast(m Incoming) (tss.ParsedMessage, error) {
 	}
 
 	return tss.ParseWireMessage(m.toUnicast().Payload, protoToPartyId(m.GetSource()), false)
+}
+
+func (st *GuardianStorage) sign(msg *tsscommv1.SignedMessage) error {
+	if msg.Sender == nil {
+		msg.Sender = partyIdToProto(st.Self)
+	}
+
+	digest := hashSignedMessage(msg)
+
+	sig, err := st.signingKey.Sign(rand.Reader, digest[:], nil)
+	msg.Signature = sig
+
+	return err
+}
+
+var ErrInvalidSignature = fmt.Errorf("invalid signature")
+
+var errEMptySignature = fmt.Errorf("empty signature")
+
+func (st *GuardianStorage) verifySignedMessage(msg *tsscommv1.SignedMessage) error {
+	if msg == nil {
+		return fmt.Errorf("nil signed message")
+	}
+
+	if msg.Signature == nil {
+		return errEMptySignature
+	}
+
+	cert, err := st.FetchCertificate(msg.Sender)
+	if err != nil {
+		return err
+	}
+
+	pk, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("certificated stored with non-ecdsa public key, guardian storage is corrupted")
+	}
+
+	digest := hashSignedMessage(msg)
+
+	isValid := ecdsa.VerifyASN1(pk, digest[:], msg.Signature)
+
+	if !isValid {
+		return ErrInvalidSignature
+	}
+
+	return nil
 }
