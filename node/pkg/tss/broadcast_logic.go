@@ -59,7 +59,7 @@ func (s *broadcaststate) updateState(f int, msg *tsscommv1.SignedMessage, echoer
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	s.votes[voterId(echoer.Id)] = true // stores only validate
+	s.votes[voterId(echoer.Id)] = true
 	if s.echoedAlready {
 		return shouldEcho, err
 	}
@@ -124,8 +124,7 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 
 	t.mtx.Unlock()
 
-	// If we weren't using TLS - at this point we would have to verify the signature of the message.
-
+	// If we weren't using TLS - at this point we would have to verify the signature of the echoer (sender).
 	f := t.GuardianStorage.getMaxExpectedFaults()
 
 	allowedToBroadcast, err := state.updateState(f, signed, echoer)

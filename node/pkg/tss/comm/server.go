@@ -57,7 +57,13 @@ func (s *server) sender() {
 		select {
 		case <-s.ctx.Done():
 			for _, con := range s.connections {
-				con.cc.Close()
+				err := con.cc.Close()
+				if err != nil {
+					s.logger.Error(
+						"couldn't close connection while shutting down",
+						zap.Error(err),
+					)
+				}
 			}
 
 			return
