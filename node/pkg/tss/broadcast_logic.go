@@ -12,10 +12,7 @@ import (
 // The following code follows Bracha's reliable broadcast algorithm.
 
 // voterId is comprised from the id and key of the signer, should match the guardians (in GuardianStorage) id and key.
-type voterId struct {
-	id  string
-	key string
-}
+type voterId string
 
 type broadcaststate struct {
 	// The following three fields should not be changed after creation of broadcaststate:
@@ -62,7 +59,7 @@ func (s *broadcaststate) updateState(f int, msg *tsscommv1.SignedMessage, echoer
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	s.votes[voterId{id: echoer.Id, key: string(echoer.Key)}] = true // stores only validate
+	s.votes[voterId(echoer.Id)] = true // stores only validate
 	if s.echoedAlready {
 		return shouldEcho, err
 	}
