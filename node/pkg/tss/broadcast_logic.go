@@ -45,6 +45,7 @@ func (s *broadcaststate) shouldDeliver(f int) bool {
 	}
 
 	s.alreadyDelivered = true
+
 	return true
 }
 
@@ -63,23 +64,25 @@ func (s *broadcaststate) updateState(f int, msg *tsscommv1.SignedMessage, echoer
 
 	s.votes[voterId{id: echoer.Id, key: string(echoer.Key)}] = true // stores only validate
 	if s.echoedAlready {
-		return
+		return shouldEcho, err
 	}
 
 	if isMsgSrc {
 		s.echoedAlready = true
 		shouldEcho = true
-		return
+
+		return shouldEcho, err
 	}
 
 	// at least one honest guardian heard this echo (meaning all honests will hear this message eventually).
 	if len(s.votes) >= f+1 {
 		s.echoedAlready = true
 		shouldEcho = true
-		return
+
+		return shouldEcho, err
 	}
 
-	return
+	return shouldEcho, err
 }
 
 func (st *GuardianStorage) getMaxExpectedFaults() int {
@@ -120,7 +123,6 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 		}
 
 		t.received[d] = state
-
 	}
 
 	t.mtx.Unlock()

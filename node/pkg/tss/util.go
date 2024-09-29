@@ -12,13 +12,14 @@ import (
 type logableError struct {
 	cause      error
 	trackingId []byte
-	round      signingRound // TODO: consider, it might require following the state of the fullParty per message.
+	round      signingRound
 }
 
 func (l logableError) Error() string {
 	if l.cause == nil {
 		return ""
 	}
+
 	return l.cause.Error()
 }
 
@@ -39,6 +40,7 @@ func logErr(l *zap.Logger, err error) {
 	informativeErr, ok := err.(logableError)
 	if !ok {
 		l.Error(err.Error())
+
 		return
 	}
 
@@ -127,7 +129,6 @@ func validatePartIdProtoCorrectForm(p *tsscommv1.PartyId) error {
 	}
 
 	return nil
-
 }
 
 func validateContentCorrectForm(m *tsscommv1.TssContent) error {
@@ -138,6 +139,7 @@ func validateContentCorrectForm(m *tsscommv1.TssContent) error {
 	if m.Payload == nil {
 		return ErrNilPayload
 	}
+
 	return nil
 }
 
@@ -156,12 +158,23 @@ const (
 	round9Message  signingRound = "round9"
 )
 
-var _intToRoundArr = []signingRound{"round1", round2Message, round3Message, round4Message, round5Message, round6Message, round7Message, round8Message, round9Message}
+var _intToRoundArr = []signingRound{
+	"round1",
+	round2Message,
+	round3Message,
+	round4Message,
+	round5Message,
+	round6Message,
+	round7Message,
+	round8Message,
+	round9Message,
+}
 
 func intToRound(i int) signingRound {
 	if i < 1 || i > 9 {
 		return ""
 	}
+
 	return _intToRoundArr[i-1]
 }
 

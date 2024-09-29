@@ -17,6 +17,7 @@ type digest [32]byte // TODO: Consider using the common.Hash they use in other p
 
 func hash(msg []byte) digest {
 	d := sha3.Sum256(msg)
+
 	return d
 }
 
@@ -47,10 +48,12 @@ func (t *Engine) sign(msg *tsscommv1.SignedMessage) error {
 	if msg.Sender == nil {
 		msg.Sender = partyIdToProto(t.Self)
 	}
+
 	digest := hashSignedMessage(msg)
 
 	sig, err := t.GuardianStorage.signingKey.Sign(rand.Reader, digest[:], nil)
 	msg.Signature = sig
+
 	return err
 }
 

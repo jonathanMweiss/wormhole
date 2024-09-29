@@ -69,6 +69,7 @@ func (s *GuardianStorage) load(storagePath string) error {
 	if err != nil {
 		return fmt.Errorf("error loading tls cert: %v", err)
 	}
+
 	s.tlsCert = &tlsCert
 
 	if len(s.GuardianCerts) != len(s.Guardians) {
@@ -92,5 +93,6 @@ func (s *GuardianStorage) parseCerts() error {
 
 		s.guardiansCerts[i] = c
 	}
+
 	return nil
 }

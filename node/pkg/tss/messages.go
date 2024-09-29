@@ -21,6 +21,7 @@ type IncomingMessage struct {
 
 func (i *IncomingMessage) IsUnicast() bool {
 	_, ok := i.Content.Message.(*tsscommv1.PropagatedMessage_Unicast)
+
 	return ok
 }
 
@@ -42,6 +43,7 @@ func (i *IncomingMessage) toUnicast() *tsscommv1.TssContent {
 
 func (i *IncomingMessage) IsBroadcast() bool {
 	_, ok := i.Content.Message.(*tsscommv1.PropagatedMessage_Echo)
+
 	return ok
 }
 
@@ -96,6 +98,7 @@ func (u *Unicast) cloneSelf() Sendable {
 	for _, pid := range u.Receipients {
 		clns = append(clns, proto.Clone(pid).(*tsscommv1.PartyId))
 	}
+
 	return &Unicast{
 		Unicast:     proto.Clone(u.Unicast).(*tsscommv1.TssContent),
 		Receipients: clns,

@@ -25,7 +25,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Engine is the implementation of reliableTSS, it is a wrapper for the tss-lib fullParty and adds reliable broadcast logic
+// Engine is the implementation of reliableTSS, it is a wrapper for the
+// tss-lib fullParty and adds reliable broadcast logic
 // to the message sending and receiving.
 type Engine struct {
 	ctx context.Context
@@ -133,17 +134,20 @@ func (st *GuardianStorage) FetchCertificate(pid *tsscommv1.PartyId) (*x509.Certi
 
 // FetchPartyId implements ReliableTSS.
 func (st *GuardianStorage) FetchPartyId(cert *x509.Certificate) (*tsscommv1.PartyId, error) {
-
 	var pid *tsscommv1.PartyId
+
 	switch v := cert.PublicKey.(type) {
 	case *ecdsa.PublicKey:
 		pem, err := internal.PublicKeyToPem(v)
 		if err != nil {
 			return nil, err
 		}
+
 		pid = st.fetchPartyIdFromBytes(pem)
+
 	case []byte:
 		pid = st.fetchPartyIdFromBytes(v)
+
 	default:
 		return nil, fmt.Errorf("unsupported public key type")
 	}
@@ -256,10 +260,11 @@ func (t *Engine) Start(ctx context.Context) error {
 
 	if err := t.fp.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
 		t.started.Store(notStarted)
+
 		return err
 	}
-	// closing the t.fp.start inside th listener
 
+	// closing the t.fp.start inside th listener
 	go t.fpListener()
 
 	t.logger.Info(
@@ -278,6 +283,7 @@ func (t *Engine) GetEthAddress() ethcommon.Address {
 	pubkey := t.fp.GetPublic()
 	ethAddBytes := ethcommon.LeftPadBytes(
 		crypto.Keccak256(tssutil.EcdsaPublicKeyToBytes(pubkey)[1:])[12:], 32)
+
 	return ethcommon.BytesToAddress(ethAddBytes)
 }
 
@@ -286,6 +292,7 @@ func (t *Engine) GetEthAddress() ethcommon.Address {
 func (t *Engine) fpListener() {
 	// using a few more seconds to ensure
 	cleanUpTicker := time.NewTicker(t.fpParams.MaxSignerTTL + time.Second*5)
+
 	for {
 		select {
 		case <-t.ctx.Done():
@@ -303,6 +310,7 @@ func (t *Engine) fpListener() {
 			tssMsg, err := t.intoSendable(m)
 			if err == nil {
 				t.messageOutChan <- tssMsg
+
 				continue
 			}
 			// else log error:
@@ -359,6 +367,7 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 	}
 
 	var sendable Sendable
+
 	if routing.IsBroadcast || len(routing.To) == 0 {
 		msgToSend := &tsscommv1.SignedMessage{
 			Content:   content,
@@ -366,13 +375,11 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 			Signature: nil,
 		}
 
-		if err := t.sign(msgToSend); err != nil { // TODO: not always needed
+		if err := t.sign(msgToSend); err != nil {
 			return nil, err
 		}
-		sendable = &Echo{
-			Echo: &tsscommv1.Echo{Message: msgToSend},
-		}
 
+		sendable = &Echo{Echo: &tsscommv1.Echo{Message: msgToSend}}
 	} else {
 		indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
 		for _, pId := range routing.To {
@@ -399,23 +406,26 @@ func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
 
 	if msg.GetSource() == nil {
 		t.logger.Error("No source in incoming message", zap.Any("msg", msg)) // shouldn't happen.
+
 		return
 	}
 
 	if msg.IsUnicast() {
 		if err := t.handleUnicast(msg); err != nil {
 			logErr(t.logger, err)
-
 		}
+
 		return
 	} else if !msg.IsBroadcast() {
 		t.logger.Error("received incoming message which is neither broadcast nor unicast", zap.Any("msg", msg))
+
 		return
 	}
 
 	shouldEcho, err := t.handleEcho(msg)
 	if err != nil {
 		logErr(t.logger, err)
+
 		return
 	}
 
@@ -425,6 +435,7 @@ func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
 
 	if err := t.sendEchoOut(msg); err != nil {
 		logErr(t.logger, err)
+
 		return
 	}
 }
@@ -563,6 +574,7 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
+
 	if _, ok := t.received[id]; ok {
 		return ErrEquivicatingGuardian
 	}
@@ -603,12 +615,11 @@ func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
 }
 
 // SECURITY NOTE: this function ensure no equivocation.
+// We don't add the content of the message to the uuid, othewrwise we won't be able to detect equivocations.
 func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
-	// We don't add the content of the message to the uuid, othewrwise we won't be able to detect equivocations.
-
 	d := append([]byte("tssMsgUUID:"), t.GuardianStorage.LoadDistributionKey...)
-
-	// Since the digest of a parsedMessage is tied to the run of the protocol for a single signature, we use it as a sessionId
+	// The TackingID of a parsed message is tied to the run of the protocol for a single
+	//  signature, thus we use it as a sessionID.
 	msgdgst := msg.WireMsg().GetTrackingID()
 	cpy := make([]byte, len(msgdgst))
 	copy(cpy, msgdgst)
@@ -616,8 +627,8 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 	d = append(d, cpy...)
 
 	// adding the sender, ensuring it is tied to the message.
-	d = append(d, msg.GetFrom().Key...)
 	d = append(d, []byte(msg.GetFrom().Id)...)
+	d = append(d, msg.GetFrom().Key...)
 
 	// Adding the round to ensure no equivocation. That is,
 	// we mustn't allow some sender j to send two different messages to the same round, in the same SessionID.
@@ -625,10 +636,10 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 	if err != nil {
 		return digest{}, err
 	}
+
 	d = append(d, []byte(rnd)...)
 
 	return hash(d), nil
-
 }
 
 func (t *Engine) parseUnicast(m Incoming) (tss.ParsedMessage, error) {

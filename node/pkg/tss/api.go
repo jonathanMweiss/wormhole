@@ -34,8 +34,9 @@ type Incoming interface {
 
 // ReliableMessenger is a component of tss, where it knows how to handle incoming tsscommv1.PropagatedMessage,
 // it may produce messages (of type Sendable), which should be delivered to other guardians.
-// these Sendable messages are produced by the tss engine, and are needed by the other guardians to complete a TSS round.
-// In addition it supplies a server with certificates of any party member, including itself.
+// these Sendable messages are produced by the tss engine, and are needed by the other guardians to
+// complete a TSS round. In addition it supplies a server with certificates of any
+// party member, including itself.
 type ReliableMessenger interface {
 	// HandleIncomingTssMessage receives a network message and process it using a reliable-broadcast protocol.
 	HandleIncomingTssMessage(msg Incoming)
@@ -56,7 +57,8 @@ type Signer interface {
 	GetEthAddress() ethcommon.Address
 }
 
-// ReliableTSS represents a TSS engine that can fully support logic of reliable broadcast needed for the security of TSS over the network.
+// ReliableTSS represents a TSS engine that can fully support logic of
+// reliable broadcast needed for the security of TSS over the network.
 type ReliableTSS interface {
 	ReliableMessenger
 	Signer
