@@ -479,6 +479,7 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 			}
 	}
 
+	// according to gg18 (tss ecdsa paper), unicasts are sent in these rounds.
 	if rnd == round1Message1 || rnd == round2Message {
 		return false,
 			logableError{
