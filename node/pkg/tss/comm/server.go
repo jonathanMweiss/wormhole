@@ -57,13 +57,7 @@ func (s *server) sender() {
 		select {
 		case <-s.ctx.Done():
 			for _, con := range s.connections {
-				err := con.cc.Close()
-				if err != nil {
-					s.logger.Error(
-						"couldn't close connection while shutting down",
-						zap.Error(err),
-					)
-				}
+				s.closeConnection(con)
 			}
 
 			return
@@ -73,7 +67,10 @@ func (s *server) sender() {
 
 		case redial := <-s.redials:
 			if _, ok := s.connections[redial.name]; ok {
-				redial.conn.cc.Close() // shouldn't open the same connection twice.
+				// shouldn't open the same connection twice.
+				// if a redial request is still needed, it will be enqueued again either
+				// on the next send attempt, or once the ticker pops.
+				s.closeConnection(redial.conn)
 
 				continue
 			}
@@ -81,9 +78,17 @@ func (s *server) sender() {
 			s.connections[redial.name] = redial.conn
 
 		case <-connectionCheckTicker.C:
-			// this case is an ensurance.
 			s.ensuredConnected()
 		}
+	}
+}
+
+func (s *server) closeConnection(con *connection) {
+	if err := con.cc.Close(); err != nil {
+		s.logger.Error(
+			"couldn't close connection while shutting down",
+			zap.Error(err),
+		)
 	}
 }
 
@@ -107,13 +112,14 @@ func (s *server) send(msg tss.Sendable) {
 
 	for _, recipient := range destinations {
 		hostname := recipient.Id
+
 		conn, ok := s.connections[hostname]
 		if !ok {
 			s.enqueueRedialRequest(hostname)
 
 			s.logger.Warn(
 				"Couldn't send message to peer. No connection found.",
-				zap.String("hostname", recipient.Id),
+				zap.String("hostname", hostname),
 			)
 
 			continue
@@ -126,7 +132,7 @@ func (s *server) send(msg tss.Sendable) {
 			s.logger.Error(
 				"couldn't send message to peer due to error.",
 				zap.Error(err),
-				zap.String("hostname", recipient.Id),
+				zap.String("hostname", hostname),
 			)
 		}
 	}
@@ -167,7 +173,7 @@ func (s *server) dailer() {
 					zap.String("hostname", dialTo),
 				)
 
-				waiters.Enqueue(dialTo)
+				waiters.Enqueue(dialTo) // ensuring a retry.
 
 				continue
 			}

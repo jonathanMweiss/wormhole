@@ -400,6 +400,8 @@ func TestBackoff(t *testing.T) {
 	})
 
 	t.Run("maxAndMinValue", func(t *testing.T) {
+		maxBackoffTime := (&dialWithBackoff{attempt: maxBackoffTimeModifier})._durationBasedOnNumberOfAttempts()
+
 		heap := newBackoffHeap()
 
 		heap.attemptsPerPeer["1"] = 23144532345345665 // large number.
