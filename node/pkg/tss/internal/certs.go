@@ -4,39 +4,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
-	"net"
-	"time"
 )
-
-// CertTemplate is a helper function to create a cert template with a serial number and other required fields
-func CertTemplate() (*x509.Certificate, error) {
-	// generate a random serial number (a real cert authority would have some logic behind this)
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return nil, errors.New("failed to generate serial number: " + err.Error())
-	}
-
-	tmpl := x509.Certificate{
-		SerialNumber:          serialNumber,
-		Subject:               pkix.Name{Organization: []string{"tsscomm"}},
-		SignatureAlgorithm:    x509.ECDSAWithSHA256,
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(time.Hour * 24 * 366 * 40), // valid for > 40 years
-		BasicConstraintsValid: true,
-
-		//TODO: Ask Yossi if this is okay to be hardcoded, no one can contact someone as localhost in a real scenario...
-		DNSNames:    []string{"localhost"},
-		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
-	}
-	return &tmpl, nil
-}
 
 // CreateCert invokes x509.CreateCertificate and returns it in the x509.Certificate format
 func CreateCert(template, parent *x509.Certificate, pub *ecdsa.PublicKey, parentPriv *ecdsa.PrivateKey) (
@@ -58,20 +30,14 @@ func CreateCert(template, parent *x509.Certificate, pub *ecdsa.PublicKey, parent
 }
 
 // NewTLSCredentials creates a self signed certificate
-func NewTLSCredentials(rootKey *ecdsa.PrivateKey) *x509.Certificate {
-
-	rootCertTmpl, err := CertTemplate()
-	if err != nil {
-		log.Fatalf("creating cert template: %v", err)
-	}
-
+func NewTLSCredentials(secretKey *ecdsa.PrivateKey, template *x509.Certificate) *x509.Certificate {
 	// this cert will be the CA that we will use to sign the server cert
-	rootCertTmpl.IsCA = true
+	template.IsCA = true
 	// describe what the certificate will be used for
-	rootCertTmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
-	rootCertTmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
+	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 
-	rootCert, _, err := CreateCert(rootCertTmpl, rootCertTmpl, &rootKey.PublicKey, rootKey)
+	rootCert, _, err := CreateCert(template, template, &secretKey.PublicKey, secretKey)
 	if err != nil {
 		log.Fatalf("error creating cert: %v", err)
 	}

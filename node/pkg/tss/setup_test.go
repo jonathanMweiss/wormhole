@@ -4,8 +4,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -207,7 +211,9 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 		player.Parameters = tss.NewParameters(tss.S256(), player.PeerContext, player.PartyID, Participants, Threshold)
 		player.IdToPIDmapping = IdToPIDmapping
 
-		x509 := internal.NewTLSCredentials(player.secretKey)
+		tmpl := newFunction()
+
+		x509 := internal.NewTLSCredentials(player.secretKey, &tmpl)
 		x509Certs[i] = internal.CertToPem(x509)
 
 		player.peerCerts = x509Certs
@@ -221,6 +227,29 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 		player.setNewKeygenHandler()
 	}
 	return all
+}
+
+func newFunction() x509.Certificate {
+	// using random serial number
+	var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
+
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		panic(err)
+	}
+
+	tmpl := x509.Certificate{
+		SerialNumber:          serialNumber,
+		Subject:               pkix.Name{Organization: []string{"tsscomm"}},
+		SignatureAlgorithm:    x509.ECDSAWithSHA256,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour * 24 * 366 * 40), // valid for > 40 years used for tests...
+		BasicConstraintsValid: true,
+
+		DNSNames:    []string{"localhost"},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	return tmpl
 }
 
 func getOrderedKeys(a *assert.Assertions) []*ecdsa.PrivateKey {
