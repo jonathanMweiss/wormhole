@@ -88,7 +88,7 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 }
 
 func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
-	d, err := t.getMessageUUID(parsed)
+	uuid, err := t.getMessageUUID(parsed)
 	if err != nil {
 		return false, false, err
 	}
@@ -100,29 +100,13 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 	signed := msg.toEcho().Message
 	echoer := msg.GetSource()
 
-	t.mtx.Lock()
-	state, ok := t.received[d]
-
-	if !ok {
-		if err := t.verifySignedMessage(signed); err != nil {
-			return false, false, err
-		}
-
-		state = &broadcaststate{
-			timeReceived:     time.Now(),
-			messageDigest:    hashSignedMessage(signed),
-			votes:            make(map[voterId]bool),
-			echoedAlready:    false,
-			alreadyDelivered: false,
-			mtx:              &sync.Mutex{},
-		}
-
-		t.received[d] = state
+	state, err := t.fetchState(uuid, signed)
+	if err != nil {
+		return false, false, err
 	}
 
-	t.mtx.Unlock()
-
-	// If we weren't using TLS - at this point we would have to verify the signature of the echoer (sender).
+	// If we weren't using TLS - at this point we would have to verify the
+	// signature of the echoer (sender).
 	f := t.GuardianStorage.getMaxExpectedFaults()
 
 	allowedToBroadcast, err := state.updateState(f, signed, echoer)
@@ -135,4 +119,31 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 	}
 
 	return allowedToBroadcast, false, nil
+}
+
+func (t *Engine) fetchState(d digest, signed *tsscommv1.SignedMessage) (*broadcaststate, error) {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+	state, ok := t.received[d]
+
+	if ok {
+		return state, nil
+	}
+
+	if err := t.verifySignedMessage(signed); err != nil {
+		return nil, err
+	}
+
+	state = &broadcaststate{
+		timeReceived:     time.Now(),
+		messageDigest:    hashSignedMessage(signed),
+		votes:            make(map[voterId]bool),
+		echoedAlready:    false,
+		alreadyDelivered: false,
+		mtx:              &sync.Mutex{},
+	}
+
+	t.received[d] = state
+
+	return state, nil
 }
