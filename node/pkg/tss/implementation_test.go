@@ -300,16 +300,59 @@ func TestBadInputs(t *testing.T) {
 		}
 	})
 
-	t.Run("nils", func(t *testing.T) {
+	t.Run("missing parts in message", func(t *testing.T) {
 		var e *Engine = nil
-
+		// these tests ensure we don't panic on bad inputs.
 		// Shouldn't fail or panic.
 		e.HandleIncomingTssMessage(nil)
 		e1.HandleIncomingTssMessage(nil)
 		e2.HandleIncomingTssMessage(nil) // e2 hadn't started.
+		err := e.handleIncomingTssMessage(nil)
+		a.ErrorIs(err, errNilIncoming)
 
-		e1.HandleIncomingTssMessage(&IncomingMessage{})
-		e1.HandleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self)})
+		err = e1.handleIncomingTssMessage(&IncomingMessage{})
+		a.ErrorIs(err, errNilSource)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self)})
+		a.ErrorIs(err, errNeitherBroadcastNorUnicast)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{}})
+		a.ErrorIs(err, errNeitherBroadcastNorUnicast)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{}},
+		})
+		a.ErrorIs(err, errNilEcho)
+
+		e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{}}},
+		})
+
+		e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+				Message: &tsscommv1.SignedMessage{},
+			}}},
+		})
+
+		e1.HandleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+				Message: &tsscommv1.SignedMessage{
+					Content:   &tsscommv1.TssContent{},
+					Sender:    &tsscommv1.PartyId{},
+					Signature: []byte{},
+				},
+			}}},
+		})
+	})
+
+	t.Run("incomings with bad form", func(t *testing.T) {
+		// parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, allRounds[5], party.Digest{byte(233)})
+		// echo := parsedIntoEcho(a, e1, parsed1)
+
+		// e1.HandleIncomingTssMessage(&IncomingMessage{
+		// 	Source:  partyIdToProto(e1.Self),
+		// 	Content: echo.GetNetworkMessage(),
+		// })
 	})
 }
 

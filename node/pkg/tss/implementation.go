@@ -398,53 +398,49 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 
 func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
 	if t == nil {
-		return
+		return // TODO: Consider what to do.
 	}
 
 	if t.started.Load() != started {
-		return // // TODO: consider returning error. can't log this, since the logger is nil.
+		return // TODO: Consider what to do.
 	}
 
-	if msg == nil {
-		t.logger.Error("received nil message to handle")
+	if err := t.handleIncomingTssMessage(msg); err != nil {
+		logErr(t.logger, err)
+	}
+}
 
-		return
+var (
+	errNilIncoming                = fmt.Errorf("received nil incoming message")
+	errNilSource                  = fmt.Errorf("no source in incoming message")
+	errNeitherBroadcastNorUnicast = fmt.Errorf("received incoming message which is neither broadcast nor unicast")
+)
+
+func (t *Engine) handleIncomingTssMessage(msg Incoming) error {
+	if msg == nil {
+		return errNilIncoming
 	}
 
 	if msg.GetSource() == nil {
-		t.logger.Error("No source in incoming message", zap.Any("msg", msg))
-
-		return
+		return errNilSource
 	}
 
 	if msg.IsUnicast() {
-		if err := t.handleUnicast(msg); err != nil {
-			logErr(t.logger, err)
-		}
-
-		return
+		return t.handleUnicast(msg)
 	} else if !msg.IsBroadcast() {
-		t.logger.Error("received incoming message which is neither broadcast nor unicast", zap.Any("msg", msg))
-
-		return
+		return errNeitherBroadcastNorUnicast
 	}
 
 	shouldEcho, err := t.handleEcho(msg)
 	if err != nil {
-		logErr(t.logger, err)
-
-		return
+		return err
 	}
 
 	if !shouldEcho {
-		return
+		return nil // not an error, just don't echo.
 	}
 
-	if err := t.sendEchoOut(msg); err != nil {
-		logErr(t.logger, err)
-
-		return
-	}
+	return t.sendEchoOut(msg)
 }
 
 func (t *Engine) sendEchoOut(m Incoming) error {
@@ -618,12 +614,13 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 var (
 	ErrUnkownEchoer = fmt.Errorf("echoer is not a known guardian")
 	ErrUnkownSender = fmt.Errorf("sender is not a known guardian")
+	errNilEcho      = fmt.Errorf("expected echo, received nil")
 )
 
 func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
 	echoMsg := m.toEcho()
 	if echoMsg == nil {
-		return nil, fmt.Errorf("incoming echo message is nil")
+		return nil, errNilEcho
 	}
 
 	if err := vaidateEchoCorrectForm(echoMsg); err != nil {
