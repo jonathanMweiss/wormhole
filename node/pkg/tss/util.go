@@ -87,6 +87,7 @@ var (
 	ErrEmptyIDInPID          = fmt.Errorf("partyId identifier is empty")
 	ErrEmptyKeyInPID         = fmt.Errorf("partyId doesn't contain a key")
 	ErrSignedMessageIsNil    = fmt.Errorf("SignedMessage is nil")
+	ErrNoContent             = fmt.Errorf("SignedMessage doesn't contain a content")
 	ErrNilPayload            = fmt.Errorf("SignedMessage doesn't contain a payload")
 )
 
@@ -133,7 +134,7 @@ func validatePartIdProtoCorrectForm(p *tsscommv1.PartyId) error {
 
 func validateContentCorrectForm(m *tsscommv1.TssContent) error {
 	if m == nil {
-		return ErrNilPayload
+		return ErrNoContent
 	}
 
 	if m.Payload == nil {

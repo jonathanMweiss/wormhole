@@ -283,7 +283,7 @@ func TestBadInputs(t *testing.T) {
 	ctx = testutils.MakeSupervisorContext(ctx)
 	e1.Start(ctx) // so it has a logger.
 
-	t.Run("bad signature", func(t *testing.T) {
+	t.Run("signature", func(t *testing.T) {
 		for j, rnd := range allRounds {
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
 			echo := parsedIntoEcho(a, e1, parsed1)
@@ -294,20 +294,25 @@ func TestBadInputs(t *testing.T) {
 			_, _, err := e1.relbroadcastInspection(parsed1, echo)
 			a.ErrorIs(err, ErrInvalidSignature)
 
+			if rnd == round1Message1 || rnd == round2Message {
+				continue
+			}
+
 			echo.setSource(e1.Self)
-			_, _, err = e1.relbroadcastInspection(parsed1, echo)
+			err = e1.handleIncomingTssMessage(echo)
 			a.ErrorIs(err, ErrInvalidSignature)
 		}
 	})
 
-	t.Run("missing parts in message", func(t *testing.T) {
-		var e *Engine = nil
+	t.Run("incoming message", func(t *testing.T) {
+		var tmp *Engine = nil
 		// these tests ensure we don't panic on bad inputs.
 		// Shouldn't fail or panic.
-		e.HandleIncomingTssMessage(nil)
+		tmp.HandleIncomingTssMessage(nil)
 		e1.HandleIncomingTssMessage(nil)
 		e2.HandleIncomingTssMessage(nil) // e2 hadn't started.
-		err := e.handleIncomingTssMessage(nil)
+
+		err := tmp.handleIncomingTssMessage(nil)
 		a.ErrorIs(err, errNilIncoming)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{})
@@ -316,43 +321,108 @@ func TestBadInputs(t *testing.T) {
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self)})
 		a.ErrorIs(err, errNeitherBroadcastNorUnicast)
 
-		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{}})
+		err = e1.handleIncomingTssMessage(&IncomingMessage{
+			Source:  partyIdToProto(e2.Self),
+			Content: &tsscommv1.PropagatedMessage{}})
 		a.ErrorIs(err, errNeitherBroadcastNorUnicast)
 
-		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
-			Message: &tsscommv1.PropagatedMessage_Echo{}},
+		err = e1.handleIncomingTssMessage(&IncomingMessage{
+			Source: partyIdToProto(e2.Self),
+			Content: &tsscommv1.PropagatedMessage{
+				Message: &tsscommv1.PropagatedMessage_Echo{},
+			},
 		})
 		a.ErrorIs(err, errNilEcho)
 
-		e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
-			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{}}},
+		err = e1.handleIncomingTssMessage(&IncomingMessage{
+			Source: partyIdToProto(e2.Self),
+			Content: &tsscommv1.PropagatedMessage{
+				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{}},
+			},
 		})
+		a.ErrorIs(err, ErrSignedMessageIsNil)
 
-		e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
-			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{},
-			}}},
+		err = e1.handleIncomingTssMessage(&IncomingMessage{
+			Source: partyIdToProto(e2.Self),
+			Content: &tsscommv1.PropagatedMessage{
+				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+					Message: &tsscommv1.SignedMessage{},
+				}}},
 		})
+		a.ErrorIs(err, ErrNilPartyId)
 
-		e1.HandleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+		err = e1.handleIncomingTssMessage(&IncomingMessage{
+			Source: partyIdToProto(e2.Self),
+			Content: &tsscommv1.PropagatedMessage{
+				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+					Message: &tsscommv1.SignedMessage{
+						Sender: &tsscommv1.PartyId{},
+					},
+				}}},
+		})
+		a.ErrorIs(err, ErrEmptyIDInPID)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{
+			Source: partyIdToProto(e2.Self),
+			Content: &tsscommv1.PropagatedMessage{
+				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+					Message: &tsscommv1.SignedMessage{
+						Sender: &tsscommv1.PartyId{
+							Id:  "a",
+							Key: []byte{},
+						},
+					},
+				}}},
+		})
+		a.ErrorIs(err, ErrEmptyKeyInPID)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
 				Message: &tsscommv1.SignedMessage{
-					Content:   &tsscommv1.TssContent{},
-					Sender:    &tsscommv1.PartyId{},
-					Signature: []byte{},
+					Sender: partyIdToProto(e2.Self),
 				},
 			}}},
 		})
+		a.ErrorIs(err, ErrNoContent)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+				Message: &tsscommv1.SignedMessage{
+					Content: &tsscommv1.TssContent{},
+					Sender:  partyIdToProto(e2.Self),
+				},
+			}}},
+		})
+		a.ErrorIs(err, ErrNilPayload)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+				Message: &tsscommv1.SignedMessage{
+					Content: &tsscommv1.TssContent{
+						Payload: []byte{1, 2, 3},
+					},
+					Sender: partyIdToProto(e2.Self),
+				},
+			}}},
+		})
+		a.ErrorIs(err, ErrNoAuthenticationField)
+
+		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
+				Message: &tsscommv1.SignedMessage{
+					Content: &tsscommv1.TssContent{
+						Payload: []byte{1, 2, 3},
+					},
+					Sender:    partyIdToProto(e2.Self),
+					Signature: []byte{1, 2, 3},
+				},
+			}}},
+		})
+		a.ErrorContains(err, "cannot parse")
 	})
 
-	t.Run("incomings with bad form", func(t *testing.T) {
-		// parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, allRounds[5], party.Digest{byte(233)})
-		// echo := parsedIntoEcho(a, e1, parsed1)
-
-		// e1.HandleIncomingTssMessage(&IncomingMessage{
-		// 	Source:  partyIdToProto(e1.Self),
-		// 	Content: echo.GetNetworkMessage(),
-		// })
+	t.Run("Begin signing", func(t *testing.T) {
+		t.Fail()
 	})
 }
 

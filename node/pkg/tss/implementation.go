@@ -619,10 +619,6 @@ var (
 
 func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
 	echoMsg := m.toEcho()
-	if echoMsg == nil {
-		return nil, errNilEcho
-	}
-
 	if err := vaidateEchoCorrectForm(echoMsg); err != nil {
 		return nil, err
 	}
@@ -673,10 +669,6 @@ func (t *Engine) parseUnicast(m Incoming) (tss.ParsedMessage, error) {
 }
 
 func (st *GuardianStorage) sign(msg *tsscommv1.SignedMessage) error {
-	if msg.Sender == nil {
-		msg.Sender = partyIdToProto(st.Self)
-	}
-
 	digest := hashSignedMessage(msg)
 
 	sig, err := st.signingKey.Sign(rand.Reader, digest[:], nil)
