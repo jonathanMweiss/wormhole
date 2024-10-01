@@ -87,14 +87,13 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 	return (st.Threshold) / 2 // this is the floor of the result.
 }
 
+var errNilEcho = fmt.Errorf("expected echo, received nil")
+
 func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
+	// No need to check input: it was already checked before reaching this point
 	uuid, err := t.getMessageUUID(parsed)
 	if err != nil {
 		return false, false, err
-	}
-
-	if echo := msg.toEcho(); echo == nil || echo.Message == nil {
-		return false, false, fmt.Errorf("expected echo, received nil")
 	}
 
 	signed := msg.toEcho().Message

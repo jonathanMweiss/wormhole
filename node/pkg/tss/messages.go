@@ -19,13 +19,25 @@ type IncomingMessage struct {
 	Content *tsscommv1.PropagatedMessage
 }
 
+func (i *IncomingMessage) hasContent() bool {
+	return i != nil && i.Content != nil
+}
+
 func (i *IncomingMessage) IsUnicast() bool {
+	if !i.hasContent() {
+		return false
+	}
+
 	_, ok := i.Content.Message.(*tsscommv1.PropagatedMessage_Unicast)
 
 	return ok
 }
 
 func (i *IncomingMessage) toEcho() *tsscommv1.Echo {
+	if !i.hasContent() {
+		return nil
+	}
+
 	if echo, ok := i.Content.Message.(*tsscommv1.PropagatedMessage_Echo); ok {
 		return echo.Echo
 	}
@@ -34,6 +46,10 @@ func (i *IncomingMessage) toEcho() *tsscommv1.Echo {
 }
 
 func (i *IncomingMessage) toUnicast() *tsscommv1.TssContent {
+	if !i.hasContent() {
+		return nil
+	}
+
 	if unicast, ok := i.Content.Message.(*tsscommv1.PropagatedMessage_Unicast); ok {
 		return unicast.Unicast.Content
 	}
@@ -42,16 +58,28 @@ func (i *IncomingMessage) toUnicast() *tsscommv1.TssContent {
 }
 
 func (i *IncomingMessage) IsBroadcast() bool {
+	if !i.hasContent() {
+		return false
+	}
+
 	_, ok := i.Content.Message.(*tsscommv1.PropagatedMessage_Echo)
 
 	return ok
 }
 
 func (i *IncomingMessage) GetNetworkMessage() *tsscommv1.PropagatedMessage {
-	return i.Content
+	if i.hasContent() {
+		return i.Content
+	}
+
+	return nil
 }
 
 func (i *IncomingMessage) GetSource() *tsscommv1.PartyId {
+	if i == nil {
+		return nil
+	}
+
 	return i.Source
 }
 

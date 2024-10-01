@@ -401,12 +401,18 @@ func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
 		return
 	}
 
+	if t.started.Load() != started {
+		return // // TODO: consider returning error. can't log this, since the logger is nil.
+	}
+
 	if msg == nil {
+		t.logger.Error("received nil message to handle")
+
 		return
 	}
 
 	if msg.GetSource() == nil {
-		t.logger.Error("No source in incoming message", zap.Any("msg", msg)) // shouldn't happen.
+		t.logger.Error("No source in incoming message", zap.Any("msg", msg))
 
 		return
 	}
@@ -684,7 +690,7 @@ func (st *GuardianStorage) sign(msg *tsscommv1.SignedMessage) error {
 
 var ErrInvalidSignature = fmt.Errorf("invalid signature")
 
-var errEMptySignature = fmt.Errorf("empty signature")
+var errEmptySignature = fmt.Errorf("empty signature")
 
 func (st *GuardianStorage) verifySignedMessage(msg *tsscommv1.SignedMessage) error {
 	if msg == nil {
@@ -692,7 +698,7 @@ func (st *GuardianStorage) verifySignedMessage(msg *tsscommv1.SignedMessage) err
 	}
 
 	if msg.Signature == nil {
-		return errEMptySignature
+		return errEmptySignature
 	}
 
 	cert, err := st.FetchCertificate(msg.Sender)

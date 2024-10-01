@@ -273,9 +273,46 @@ func TestEquivocation(t *testing.T) {
 	})
 }
 
-func TestBadSignatures(t *testing.T) {
-	t.FailNow() // TODO
+func TestBadInputs(t *testing.T) {
+	a := assert.New(t)
+	engines := loadGuardians(a)
+	e1, e2 := engines[0], engines[1]
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*60)
+	defer cancel()
+	ctx = testutils.MakeSupervisorContext(ctx)
+	e1.Start(ctx) // so it has a logger.
+
+	t.Run("bad signature", func(t *testing.T) {
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+			echo := parsedIntoEcho(a, e1, parsed1)
+
+			echo.setSource(e2.Self)
+
+			echo.toEcho().Message.Signature[0] += 1
+			_, _, err := e1.relbroadcastInspection(parsed1, echo)
+			a.ErrorIs(err, ErrInvalidSignature)
+
+			echo.setSource(e1.Self)
+			_, _, err = e1.relbroadcastInspection(parsed1, echo)
+			a.ErrorIs(err, ErrInvalidSignature)
+		}
+	})
+
+	t.Run("nils", func(t *testing.T) {
+		var e *Engine = nil
+
+		// Shouldn't fail or panic.
+		e.HandleIncomingTssMessage(nil)
+		e1.HandleIncomingTssMessage(nil)
+		e2.HandleIncomingTssMessage(nil) // e2 hadn't started.
+
+		e1.HandleIncomingTssMessage(&IncomingMessage{})
+		e1.HandleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self)})
+	})
 }
+
 func TestE2E(t *testing.T) {
 	// Setting up 5 engines, each with a different guardian storage.
 	// all will attempt to sign a single message, while outputing messages to each other,
