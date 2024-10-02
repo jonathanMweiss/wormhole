@@ -339,6 +339,10 @@ func (t *Engine) fpListener() {
 			logErr(t.logger, lgErr)
 
 		case err := <-t.fpErrChannel:
+			if err == nil {
+				continue // shouldn't happen. safety.
+			}
+
 			logErr(t.logger, &logableError{
 				fmt.Errorf("error in signing protocol: %w", err.Cause()),
 				err.TrackingId(),
@@ -363,6 +367,7 @@ func (t *Engine) cleanup() {
 		}
 	}
 }
+
 func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 	bts, routing, err := m.WireBytes()
 	if err != nil {
@@ -594,6 +599,7 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 	if err != nil {
 		return fmt.Errorf("failed storing the unicast: %w", err)
 	}
+
 	msgDigest := hash(bts)
 
 	t.mtx.Lock()

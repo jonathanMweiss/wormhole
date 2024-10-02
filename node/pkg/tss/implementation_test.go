@@ -486,6 +486,44 @@ func TestCleanup(t *testing.T) {
 	a.True(ok)
 }
 
+type badtssMessage struct {
+}
+
+func (b *badtssMessage) GetFrom() *tss.PartyID         { panic("unimplemented") }
+func (b *badtssMessage) GetTo() []*tss.PartyID         { panic("unimplemented") }
+func (b *badtssMessage) IsBroadcast() bool             { panic("unimplemented") }
+func (b *badtssMessage) IsToOldAndNewCommittees() bool { panic("unimplemented") }
+func (b *badtssMessage) IsToOldCommittee() bool        { panic("unimplemented") }
+func (b *badtssMessage) String() string                { panic("unimplemented") }
+func (b *badtssMessage) Type() string                  { panic("unimplemented") }
+func (b *badtssMessage) WireMsg() *tss.MessageWrapper {
+	return &tss.MessageWrapper{
+		TrackingID: nil,
+	}
+}
+func (b *badtssMessage) WireBytes() ([]byte, *tss.MessageRouting, error) {
+	return nil, nil, errors.New("bad message")
+}
+
+func TestRouteCheck(t *testing.T) {
+	// this test is a bit of a hack.
+	// To ensure we don't panic on bad inputs.
+	a := assert.New(t)
+	engines := loadGuardians(a)
+	e1 := engines[0]
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	e1.Start(testutils.MakeSupervisorContext(ctx))
+	e1.fpOutChan <- &badtssMessage{}
+	e1.fpErrChannel <- tss.NewTrackableError(errors.New("test"), "test", -1, nil, make([]byte, 32))
+	e1.fpErrChannel <- nil
+
+	time.Sleep(time.Millisecond * 200)
+
+}
+
 func TestE2E(t *testing.T) {
 	// Setting up 5 engines, each with a different guardian storage.
 	// all will attempt to sign a single message, while outputing messages to each other,
