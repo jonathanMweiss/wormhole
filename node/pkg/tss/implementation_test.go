@@ -12,6 +12,8 @@ import (
 
 	"github.com/certusone/wormhole/node/pkg/internal/testutils"
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
@@ -301,6 +303,7 @@ func TestBadInputs(t *testing.T) {
 			echo.setSource(e1.Self)
 			err = e1.handleIncomingTssMessage(echo)
 			a.ErrorIs(err, ErrInvalidSignature)
+			e1.HandleIncomingTssMessage(echo) // to ensure we go through some code path, nothing to check really.
 		}
 	})
 
@@ -332,7 +335,7 @@ func TestBadInputs(t *testing.T) {
 				Message: &tsscommv1.PropagatedMessage_Echo{},
 			},
 		})
-		a.ErrorIs(err, errNilEcho)
+		a.ErrorIs(err, ErrEchoIsNil)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{
 			Source: partyIdToProto(e2.Self),
@@ -422,8 +425,65 @@ func TestBadInputs(t *testing.T) {
 	})
 
 	t.Run("Begin signing", func(t *testing.T) {
-		t.Fail()
+		var tmp *Engine = nil
+		engines2 := loadGuardians(a)
+
+		a.ErrorIs(tmp.BeginAsyncThresholdSigningProtocol(nil), errNilTssEngine)
+		a.ErrorIs(e2.BeginAsyncThresholdSigningProtocol(nil), errTssEngineNotStarted)
+
+		tmp = engines2[1]
+		tmp.started.Store(started)
+		tmp.fp = nil
+		a.ErrorContains(tmp.BeginAsyncThresholdSigningProtocol(nil), "not set up correctly")
+
+		a.ErrorContains(e1.BeginAsyncThresholdSigningProtocol(make([]byte, 12)), "length is not 32 bytes")
 	})
+
+	t.Run("fetch certificate", func(t *testing.T) {
+		_, err := e1.FetchCertificate(nil)
+		a.ErrorIs(err, ErrNilPartyId)
+
+		_, err = e1.FetchCertificate(&tsscommv1.PartyId{})
+		a.ErrorContains(err, "not found")
+	})
+}
+
+func TestFetchPartyId(t *testing.T) {
+	a := assert.New(t)
+	engines := loadGuardians(a)
+	e1 := engines[0]
+	pid, err := e1.FetchPartyId(e1.guardiansCerts[0])
+	a.NoError(err)
+	a.Equal(e1.Self.Id, pid.Id)
+
+	crt := createX509Cert()
+	_, err = e1.FetchPartyId(crt)
+	a.ErrorContains(err, "unsupported") // cert.PublicKey=nil
+
+	crt.PublicKey = []byte{1, 2, 3}
+	_, err = e1.FetchPartyId(crt)
+	a.ErrorContains(err, "unknown")
+}
+
+func TestCleanup(t *testing.T) {
+	a := assert.New(t)
+	engines := loadGuardians(a)
+	e1 := engines[0]
+
+	e1.received[digest{1}] = &broadcaststate{
+		timeReceived: time.Now().Add(time.Minute * 10 * (-1)),
+	}
+	e1.received[digest{2}] = &broadcaststate{
+		timeReceived: time.Now(),
+	}
+
+	e1.cleanup()
+	a.Len(e1.received, 1)
+	_, ok := e1.received[digest{1}]
+	a.False(ok)
+
+	_, ok = e1.received[digest{2}]
+	a.True(ok)
 }
 
 func TestE2E(t *testing.T) {
@@ -660,8 +720,24 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 							continue
 						}
 						unicast(m, chns, engine)
-					case <-engine.ProducedSignature():
-						once.Do(func() { close(signalSuccess) })
+					case sig := <-engine.ProducedSignature():
+						once.Do(func() {
+							close(signalSuccess)
+						})
+
+						signature := append(sig.Signature, sig.SignatureRecovery...)
+						address := engine.GetEthAddress()
+
+						pubKey, err := crypto.Ecrecover(sig.M, signature)
+						if err != nil {
+							panic("failed to do ecrecover:" + err.Error())
+						}
+						addr := common.BytesToAddress(crypto.Keccak256(pubKey[1:])[12:])
+
+						// check that the recovered address equals the provided address
+						if addr != address {
+							panic("recovered address does not match provided address")
+						}
 						return // TODO verify signature.
 					case <-signalSuccess:
 						return

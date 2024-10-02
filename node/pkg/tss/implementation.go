@@ -123,6 +123,10 @@ func (st *GuardianStorage) fetchPartyIdFromBytes(pk []byte) *tsscommv1.PartyId {
 }
 
 func (st *GuardianStorage) FetchCertificate(pid *tsscommv1.PartyId) (*x509.Certificate, error) {
+	if pid == nil {
+		return nil, ErrNilPartyId
+	}
+
 	id := protoToPartyId(pid)
 	for i, v := range st.Guardians {
 		if equalPartyIds(id, v) {
@@ -145,10 +149,8 @@ func (st *GuardianStorage) FetchPartyId(cert *x509.Certificate) (*tsscommv1.Part
 		}
 
 		pid = st.fetchPartyIdFromBytes(pem)
-
 	case []byte:
 		pid = st.fetchPartyIdFromBytes(v)
-
 	default:
 		return nil, fmt.Errorf("unsupported public key type")
 	}
@@ -170,14 +172,19 @@ func (st *GuardianStorage) GetPeers() []*x509.Certificate {
 	return st.guardiansCerts
 }
 
+var (
+	errNilTssEngine        = fmt.Errorf("tss engine is nil")
+	errTssEngineNotStarted = fmt.Errorf("tss engine hasn't started")
+)
+
 // BeginAsyncThresholdSigningProtocol used to start the TSS protocol over a specific msg.
 func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	if t == nil {
-		return fmt.Errorf("tss engine is nil")
+		return errNilTssEngine
 	}
 
 	if t.started.Load() != started {
-		return fmt.Errorf("tss engine hasn't started")
+		return errTssEngineNotStarted
 	}
 
 	if t.fp == nil {
@@ -614,7 +621,6 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 var (
 	ErrUnkownEchoer = fmt.Errorf("echoer is not a known guardian")
 	ErrUnkownSender = fmt.Errorf("sender is not a known guardian")
-	errNilEcho      = fmt.Errorf("expected echo, received nil")
 )
 
 func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {

@@ -211,9 +211,9 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 		player.Parameters = tss.NewParameters(tss.S256(), player.PeerContext, player.PartyID, Participants, Threshold)
 		player.IdToPIDmapping = IdToPIDmapping
 
-		tmpl := newFunction()
+		tmpl := createX509Cert()
 
-		x509 := internal.NewTLSCredentials(player.secretKey, &tmpl)
+		x509 := internal.NewTLSCredentials(player.secretKey, tmpl)
 		x509Certs[i] = internal.CertToPem(x509)
 
 		player.peerCerts = x509Certs
@@ -229,7 +229,7 @@ func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
 	return all
 }
 
-func newFunction() x509.Certificate {
+func createX509Cert() *x509.Certificate {
 	// using random serial number
 	var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 
@@ -249,7 +249,7 @@ func newFunction() x509.Certificate {
 		DNSNames:    []string{"localhost"},
 		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
 	}
-	return tmpl
+	return &tmpl
 }
 
 func getOrderedKeys(a *assert.Assertions) []*ecdsa.PrivateKey {
