@@ -82,7 +82,7 @@ func (s *broadcaststate) updateState(f int, msg *tsscommv1.SignedMessage, echoer
 }
 
 func (st *GuardianStorage) getMaxExpectedFaults() int {
-	// since threshold is 2/3 *f +1, f = (st.Threshold - 1) / 2
+	// since threshold is 2/3*n+1, f = (st.Threshold - 1) / 2
 	// in our case st.Threshold is not inclusive, so we don't need to subtract 1.
 	return (st.Threshold) / 2 // this is the floor of the result.
 }
