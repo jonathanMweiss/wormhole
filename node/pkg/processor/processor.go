@@ -487,14 +487,15 @@ func (p *Processor) processTssSignature(sig *tsscommon.SignatureData) {
 func (p *Processor) validateTssSignature(sig *tsscommon.SignatureData) ([]byte, error) {
 	signature := append(sig.Signature, sig.SignatureRecovery...)
 
-	pubKey, err := crypto.Ecrecover(sig.M, signature)
-	if err != nil {
-		return nil, err
-	}
+	// TODO: Discuss with @yossigi if we should use actually validate the signature. It is already done in the fullParty in finilized.go
+	// pubKey, err := crypto.Ecrecover(sig.M, signature)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	if ethcommon.BytesToAddress(crypto.Keccak256(pubKey[1:])[12:]) != p.thresholdSigner.GetEthAddress() {
-		return nil, fmt.Errorf("ecRecovered public key does not match threshold signer")
-	}
+	// if ethcommon.BytesToAddress(crypto.Keccak256(pubKey[1:])[12:]) != p.thresholdSigner.GetEthAddress() {
+	// 	return nil, fmt.Errorf("ecRecovered public key does not match threshold signer")
+	// }
 
 	return signature, nil
 }
