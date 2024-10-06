@@ -460,19 +460,41 @@ func (p *Processor) processTssSignature(sig *tsscommon.SignatureData) {
 		return
 	}
 
-	digestBytes := sig.M
-	hash := hex.EncodeToString(digestBytes)
+	vaaDigest := sig.M
+
+	hash := hex.EncodeToString(vaaDigest)
 	wtr, ok := p.tssWaiters[hash]
 	if !ok {
-		// TODO: this indicates a TSS signature that was waited for too long probably.
+		// this indicates a TSS signature that was waited for too long.
 		p.logger.Warn("received TSS signature for unknown VAA", zap.String("hash", hash))
+		return
+	}
+
+	signature, err := p.validateTssSignature(sig)
+	if err != nil {
+		p.logger.Error("tss signature failed", zap.Error(err), zap.String("vaaID", wtr.vaa.UniqueID()))
 		return
 	}
 
 	// TODO: Should we return a signature already in the correct format from the TssEngine? or giving the processor more control is better?
 	vaaSig := &vaa.Signature{}
-	copy(vaaSig.Signature[:], append(sig.Signature, sig.SignatureRecovery...))
+	copy(vaaSig.Signature[:], signature)
 
 	// using single signature, since it was reached via threshold signing.
 	wtr.vaa.HandleQuorum([]*vaa.Signature{vaaSig}, hash, p)
+}
+
+func (p *Processor) validateTssSignature(sig *tsscommon.SignatureData) ([]byte, error) {
+	signature := append(sig.Signature, sig.SignatureRecovery...)
+
+	pubKey, err := crypto.Ecrecover(sig.M, signature)
+	if err != nil {
+		return nil, err
+	}
+
+	if ethcommon.BytesToAddress(crypto.Keccak256(pubKey[1:])[12:]) != p.thresholdSigner.GetEthAddress() {
+		return nil, fmt.Errorf("ecRecovered public key does not match threshold signer")
+	}
+
+	return signature, nil
 }
