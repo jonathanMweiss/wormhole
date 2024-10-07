@@ -10,18 +10,34 @@ const (
 	minBackoffTime         = time.Millisecond * 100
 )
 
-type dialWithBackoff struct {
-	hostname       string
-	attempt        uint64
-	nextRedialTime time.Time
-}
-
 // NOT THREAD SAFE! do NOT share between two different goroutines.
+//
+// This struct is a a conjunction of min-heap and timer to create a list of tasks with deadlines cheaply.
+// Mainly similar to multiple cases of `time.After(func(){})“, but without using goroutines under the hood for each
+// invocation of Enqueue.
 type backoffHeap struct {
 	heap            []dialWithBackoff
 	timer           *time.Timer
 	alreadyInHeap   map[string]bool
 	attemptsPerPeer map[string]uint64 // on successful dial, reset to 0.
+}
+
+type dialWithBackoff struct {
+	hostname string
+	attempt  uint64
+
+	/*
+		We use this redialTime to calculate when to set timers for redial requests.
+
+		IMPORTANT:
+		Go 1.19 introduced to `time.Time` type monotonic clocks to ensure local changes to
+		the system clock does not affect time comparisons methods
+		like t.After(u), t.Before(u), t.Equal(u), t.Compare(u), and t.Sub(u)
+		(see time package docs for further information).
+
+		Therefore, we can safely use `time.Time` in this struct to set timers for correctly redialing.
+	*/
+	nextRedialTime time.Time
 }
 
 // Enqueue adds a hostname to the heap, with a new backoff time.
@@ -83,6 +99,7 @@ func (d *backoffHeap) setTopAsTimer() {
 	endTime := d.peek().nextRedialTime // we have at least one element.
 
 	d.stopAndDrainTimer()
+	// endtime.Sub(time.Now()) uses monotonic clock.
 	d.timer.Reset(time.Until(endTime))
 }
 

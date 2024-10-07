@@ -104,7 +104,6 @@ func (s *server) ensuredConnected() {
 }
 
 func (s *server) send(msg tss.Sendable) {
-
 	destinations := msg.GetDestinations()
 	if msg.IsBroadcast() {
 		destinations = s.peers // taking everyone the server knows about.
