@@ -6,7 +6,8 @@ import (
 )
 
 type Echo struct {
-	Echo *tsscommv1.Echo
+	Echo       *tsscommv1.Echo
+	Recipients []*tsscommv1.PartyId
 }
 
 type Unicast struct {
@@ -85,7 +86,7 @@ func (i *IncomingMessage) GetSource() *tsscommv1.PartyId {
 
 // GetDestinations implements Sendable.
 func (e *Echo) GetDestinations() []*tsscommv1.PartyId {
-	return nil
+	return e.Recipients
 }
 
 // GetNetworkMessage implements Sendable.

@@ -392,7 +392,15 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 			return nil, err
 		}
 
-		sendable = &Echo{Echo: &tsscommv1.Echo{Message: msgToSend}}
+		dests := make([]*tsscommv1.PartyId, len(t.Guardians))
+		for i, pId := range t.Guardians {
+			dests[i] = partyIdToProto(pId)
+		}
+
+		sendable = &Echo{
+			Echo:       &tsscommv1.Echo{Message: msgToSend},
+			Recipients: dests,
+		}
 	} else {
 		indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
 		for _, pId := range routing.To {

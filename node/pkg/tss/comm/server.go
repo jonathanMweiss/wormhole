@@ -120,12 +120,7 @@ func (s *server) forceDialIfNotConnected() {
 }
 
 func (s *server) send(msg tss.Sendable) {
-	destinations := msg.GetDestinations()
-	if msg.IsBroadcast() {
-		destinations = s.peers // taking everyone the server knows about.
-	}
-
-	for _, recipient := range destinations {
+	for _, recipient := range msg.GetDestinations() {
 		hostname := recipient.Id
 
 		conn, ok := s.connections[hostname]

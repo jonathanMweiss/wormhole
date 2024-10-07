@@ -26,6 +26,10 @@ import (
 
 const workingServerSock = "127.0.0.1:5933"
 
+var workingServerAsMessageRecipient = []*tsscommv1.PartyId{&tsscommv1.PartyId{
+	Id: workingServerSock,
+}}
+
 type mockTssMessageHandler struct {
 	chn              chan tss.Sendable
 	selfCert         *tls.Certificate
@@ -123,10 +127,15 @@ func TestTLSConnectAndRedial(t *testing.T) {
 	time.Sleep(time.Second)
 
 	//should cause disconnect
-	msgChan <- &tss.Echo{}
+	msgChan <- &tss.Echo{
+		Echo:       &tsscommv1.Echo{},
+		Recipients: workingServerAsMessageRecipient,
+	}
 	time.Sleep(time.Second * 2)
 
-	msgChan <- &tss.Unicast{}
+	msgChan <- &tss.Unicast{
+		Receipients: workingServerAsMessageRecipient,
+	}
 
 	select {
 	case <-ctx.Done():
@@ -194,7 +203,7 @@ func TestRelentlessReconnections(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		msgChan <- &tss.Unicast{
 			Unicast:     &tsscommv1.TssContent{},
-			Receipients: []*tsscommv1.PartyId{{Id: workingServerSock}},
+			Receipients: workingServerAsMessageRecipient,
 		}
 
 		select {
@@ -289,7 +298,9 @@ func TestNonBlockedBroadcast(t *testing.T) {
 
 	numDones := 0
 	for i := 0; i < 10; i++ {
-		msgChan <- &tss.Echo{}
+		msgChan <- &tss.Echo{
+			Recipients: workingServerAsMessageRecipient,
+		}
 
 		select {
 		case <-ctx.Done():
