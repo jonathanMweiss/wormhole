@@ -10,9 +10,12 @@ import (
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/tss"
+	"github.com/gogo/status"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 )
 
 type connection struct {
@@ -57,6 +60,8 @@ func (s *server) run() {
 		})
 	}
 }
+
+const connectionCheckTime = time.Second * 5
 
 func (s *server) sender() {
 	connectionCheckTicker := time.NewTicker(connectionCheckTime)
@@ -243,19 +248,14 @@ func (s *server) dial(hostname string) error {
 }
 
 func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
-	cert, err := extractClientCert(inStream.Context())
+	clientId, err := s.getIdentityFromIncomingStream(inStream)
 	if err != nil {
-		s.logger.Error(
-			"failed to receive incoming stream",
+		s.logger.Warn(
+			"did not accept incoming peer connection",
 			zap.Error(err),
 		)
 
 		return err
-	}
-
-	clientId, err := s.tssMessenger.FetchPartyId(cert)
-	if err != nil {
-		return fmt.Errorf("unrecognized client: %w", err)
 	}
 
 	for {
@@ -284,4 +284,56 @@ func (s *server) Send(inStream tsscommv1.DirectLink_SendServer) error {
 			Content: m,
 		})
 	}
+}
+
+// getIdentityFromIncomingStream extracts the peer identity from the
+// incoming TLS certificate embbeded into the stream.
+// adds various checks to ensure the client is a valid guardian.
+func (s *server) getIdentityFromIncomingStream(inStream tsscommv1.DirectLink_SendServer) (*tsscommv1.PartyId, error) {
+	p, ok := peer.FromContext(inStream.Context())
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "unable to retrieve peer from context")
+	}
+
+	// Extract AuthInfo (TLS information)
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "unexpected peer transport credentials type, please use tls")
+	}
+
+	// check incoming TLS cert doesn't contain a chain (should be a leaf cert).
+	// this is more of a precaution.
+	if len(tlsInfo.State.PeerCertificates) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "no client certificate provided")
+	}
+
+	if len(tlsInfo.State.PeerCertificates) != 1 {
+		return nil, status.Error(codes.PermissionDenied, "expected certificate to be a CA")
+	}
+
+	for _, chain := range tlsInfo.State.VerifiedChains {
+		if len(chain) != 1 {
+			return nil, status.Error(codes.PermissionDenied, "certificate has a chain")
+		}
+	}
+
+	// Get the peer's certificate: The first element is the leaf certificate
+	// that the connection is verified against
+	clientCert := tlsInfo.State.PeerCertificates[0]
+
+	if clientCert.PublicKeyAlgorithm != x509.ECDSA {
+		return nil, status.Error(codes.InvalidArgument, "certificate must use ECDSA")
+	}
+
+	if !clientCert.IsCA {
+		return nil, status.Error(codes.PermissionDenied, "client certificate is not a CA, but a leaf certificate")
+	}
+
+	// fetch the party ID according to the public key used to verify this certificate (embbded in the cert).
+	clientId, err := s.tssMessenger.FetchPartyId(clientCert)
+	if err != nil {
+		return nil, fmt.Errorf("client certificate wasn't found: %w", err)
+	}
+
+	return clientId, nil
 }

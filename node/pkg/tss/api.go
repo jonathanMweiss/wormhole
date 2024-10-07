@@ -38,13 +38,15 @@ type Incoming interface {
 // complete a TSS round. In addition it supplies a server with certificates of any
 // party member, including itself.
 type ReliableMessenger interface {
-	// HandleIncomingTssMessage receives a network message and process it using a reliable-broadcast protocol.
+	// HandleIncomingTssMessage receives a network `message`` and process it using a reliable-broadcast protocol.
 	HandleIncomingTssMessage(msg Incoming)
 	ProducedOutputMessages() <-chan Sendable // just need to propagate this through the p2p network
 
 	// Utilities for servers:
 	GetCertificate() *tls.Certificate // containing secret key.
 	GetPeers() []*x509.Certificate    // containing public keys.
+	// FetchPartyId returns the PartyId for a given certificate, it'll use the public key
+	// in the certificate and match it to the public key expected to be found in `*tsscommv1.PartyId`.
 	FetchPartyId(cert *x509.Certificate) (*tsscommv1.PartyId, error)
 }
 

@@ -104,9 +104,9 @@ func (s *server) makeServerCredentials() grpc.ServerOption {
 		&tls.Config{
 			MinVersion:   tls.VersionTLS13, // version 1.3
 			Certificates: []tls.Certificate{*s.tssMessenger.GetCertificate()},
-			RootCAs:      certPool, // treating each peer as its own CA, will use the given cert as the ID of the peer.
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			ClientCAs:    certPool,
+
+			ClientAuth: tls.RequireAndVerifyClientCert,
+			ClientCAs:  certPool, // treating each peer as its own CA, will use the given cert as the ID of the peer.
 		},
 	))
 

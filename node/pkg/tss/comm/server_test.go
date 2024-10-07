@@ -2,10 +2,12 @@ package comm
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync/atomic"
@@ -19,6 +21,7 @@ import (
 	"github.com/certusone/wormhole/node/pkg/tss/internal"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 const workingServerSock = "127.0.0.1:5933"
@@ -51,7 +54,6 @@ type testServer struct {
 }
 
 func (w *testServer) Send(in tsscommv1.DirectLink_SendServer) error {
-	fmt.Println("Send Called")
 	prevVal := w.Uint32.Add(1)
 	if int(prevVal) == w.numberOfReconnectionAttempts {
 		close(w.done)
@@ -459,4 +461,115 @@ func _loadGuardians(numParticipants int) ([]*tss.Engine, error) {
 	}
 
 	return engines, nil
+}
+
+type testCAInspectionFailForNonCACerts struct {
+	*server
+	atomic.Uint32
+	done                         chan struct{}
+	numberOfReconnectionAttempts int
+	// when set to true, the server will block for 30 seconds.
+	isMaliciousBlocker bool
+}
+
+func TestNotAcceptNonCAs(t *testing.T) {
+	a := require.New(t)
+
+	en, err := _loadGuardians(2)
+	a.NoError(err)
+
+	// ============
+	// Creating new Cert which is NOT a CA
+	// ============
+
+	serverCert, err := internal.PemToCert(en[0].GuardianStorage.TlsX509)
+	a.NoError(err)
+
+	rootKey, err := internal.PemToPrivateKey(en[0].PrivateKey)
+	a.NoError(err)
+	clientTlsCert, clientCert := tlsCert(serverCert, rootKey)
+
+	// ============
+	// setting server up, with this Cert allowed
+	// ============
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+	defer cancel()
+	ctx = testutils.MakeSupervisorContext(ctx)
+
+	tmp, err := NewServer(workingServerSock, supervisor.Logger(ctx), &mockTssMessageHandler{
+		chn:      nil,
+		selfCert: en[0].GetCertificate(),
+		// connect to no one.
+		peersToConnectTo: []*x509.Certificate{clientCert}, // Give the peer a certificate.
+		peerId:           &tsscommv1.PartyId{},
+	})
+	a.NoError(err)
+
+	server := tmp.(*server)
+	server.ctx = ctx
+
+	listener, err := net.Listen("tcp", workingServerSock)
+	a.NoError(err)
+	defer listener.Close()
+
+	gserver := grpc.NewServer(server.makeServerCredentials())
+	defer gserver.Stop()
+
+	tsscommv1.RegisterDirectLinkServer(gserver, server)
+	go gserver.Serve(listener)
+
+	time.Sleep(time.Millisecond * 200)
+	// ============
+	// trying to send message using cert
+	// ============
+	pool := x509.NewCertPool()
+
+	runningServerX509, err := internal.PemToCert(en[0].GuardianStorage.TlsX509)
+	a.NoError(err)
+
+	pool.AddCert(runningServerX509) // dialing to peer and accepting his cert only.
+
+	cc, err := grpc.Dial(workingServerSock,
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			MinVersion:   tls.VersionTLS13,                  // tls 1.3
+			Certificates: []tls.Certificate{*clientTlsCert}, // our cert to be sent to the peer.
+			RootCAs:      pool,
+		})),
+	)
+	a.NoError(err)
+
+	defer cc.Close()
+
+	stream, err := tsscommv1.NewDirectLinkClient(cc).Send(ctx)
+	a.NoError(err)
+
+	stream.Send(&tsscommv1.PropagatedMessage{})
+	_, err = stream.CloseAndRecv()
+	a.ErrorContains(err, "not a CA")
+}
+
+func tlsCert(rootCA *x509.Certificate, rootKey *ecdsa.PrivateKey) (*tls.Certificate, *x509.Certificate) {
+	template := *rootCA
+	// this cert will be the CA that we will use to sign the server cert
+	template.IsCA = false
+	// describe what the certificate will be used for
+	template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
+	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+
+	pubcert, certpem, err := internal.CreateCert(&template, rootCA, &priv.PublicKey, rootKey)
+	if err != nil {
+		panic(err)
+	}
+
+	tlscert, err := tls.X509KeyPair(certpem, internal.PrivateKeyToPem(priv))
+	if err != nil {
+		panic(err)
+	}
+	return &tlscert, pubcert
 }
