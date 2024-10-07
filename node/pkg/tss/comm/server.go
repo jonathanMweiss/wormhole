@@ -25,6 +25,11 @@ type redialResponse struct {
 	conn *connection
 }
 
+type redialRequest struct {
+	hostname   string
+	immediatly bool //used to skip waiting in the dialer backoff mechanism
+}
+
 type server struct {
 	tsscommv1.UnimplementedDirectLinkServer
 	ctx        context.Context
@@ -37,16 +42,19 @@ type server struct {
 	peerToCert map[string]*x509.Certificate
 	// to ensure thread-safety without locks, only the sender is allowed to change this map.
 	connections   map[string]*connection
-	requestRedial chan string
+	requestRedial chan redialRequest
 	redials       chan redialResponse
 }
 
 func (s *server) run() {
-	go s.dailer()
+	go s.dialer()
 	go s.sender()
 
 	for _, pid := range s.peers {
-		s.enqueueRedialRequest(pid.Id)
+		s.enqueueRedialRequest(redialRequest{
+			hostname:   pid.Id,
+			immediatly: false,
+		})
 	}
 }
 
@@ -78,7 +86,7 @@ func (s *server) sender() {
 			s.connections[redial.name] = redial.conn
 
 		case <-connectionCheckTicker.C:
-			s.ensuredConnected()
+			s.forceDialIfNotConnected()
 		}
 	}
 }
@@ -92,12 +100,15 @@ func (s *server) closeConnection(con *connection) {
 	}
 }
 
-func (s *server) ensuredConnected() {
+func (s *server) forceDialIfNotConnected() {
 	if len(s.connections) != len(s.peers) {
 		for _, pid := range s.peers {
 			hostname := pid.Id
 			if _, ok := s.connections[hostname]; !ok {
-				s.enqueueRedialRequest(hostname)
+				s.enqueueRedialRequest(redialRequest{
+					hostname:   hostname,
+					immediatly: true,
+				})
 			}
 		}
 	}
@@ -114,7 +125,10 @@ func (s *server) send(msg tss.Sendable) {
 
 		conn, ok := s.connections[hostname]
 		if !ok {
-			s.enqueueRedialRequest(hostname)
+			s.enqueueRedialRequest(redialRequest{
+				hostname:   hostname,
+				immediatly: false,
+			})
 
 			s.logger.Warn(
 				"Couldn't send message to peer. No connection found.",
@@ -126,7 +140,10 @@ func (s *server) send(msg tss.Sendable) {
 
 		if err := conn.stream.Send(msg.GetNetworkMessage()); err != nil {
 			delete(s.connections, hostname)
-			s.enqueueRedialRequest(hostname)
+			s.enqueueRedialRequest(redialRequest{
+				hostname:   hostname,
+				immediatly: false,
+			})
 
 			s.logger.Error(
 				"couldn't send message to peer due to error.",
@@ -137,52 +154,58 @@ func (s *server) send(msg tss.Sendable) {
 	}
 }
 
-func (s *server) enqueueRedialRequest(hostname string) {
+func (s *server) enqueueRedialRequest(rqst redialRequest) {
 	select {
 	case <-s.ctx.Done():
 		return
-	case s.requestRedial <- hostname:
-		s.logger.Debug("requested redial", zap.String("hostname", hostname))
+	case s.requestRedial <- rqst:
+		s.logger.Debug("requested redial", zap.String("hostname", rqst.hostname))
 
 		return
 	default:
-		s.logger.Warn("couldn't send request to redial", zap.String("hostname", hostname))
+		s.logger.Warn("couldn't send request to redial", zap.String("hostname", rqst.hostname))
 	}
 }
 
-func (s *server) dailer() {
+func (s *server) dialer() {
 	// using a heap instead of time.AfterFunc/ After to reduce the number of
 	// goroutines generated to 0 (not including the dialer itself).
 	waiters := newBackoffHeap()
 
 	for {
+		dialTo := ""
+
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-waiters.timer.C:
-			dialTo := waiters.Dequeue()
-			if dialTo == "" {
-				continue
+			dialTo = waiters.Dequeue()
+		case rqst := <-s.requestRedial:
+			if rqst.immediatly {
+				dialTo = rqst.hostname // will drop down to the dialing section.
+			} else {
+				waiters.Enqueue(rqst.hostname)
 			}
-
-			if err := s.dial(dialTo); err != nil {
-				s.logger.Error(
-					"couldn't create direct link to peer",
-					zap.Error(err),
-					zap.String("hostname", dialTo),
-				)
-
-				waiters.Enqueue(dialTo) // ensuring a retry.
-
-				continue
-			}
-
-			s.logger.Info("dialed to peer", zap.String("hostname", dialTo))
-			waiters.ResetAttempts(dialTo)
-
-		case dialTo := <-s.requestRedial:
-			waiters.Enqueue(dialTo)
 		}
+
+		if dialTo == "" {
+			continue // skip (nothing to dial to)
+		}
+
+		if err := s.dial(dialTo); err != nil {
+			s.logger.Error(
+				"couldn't create direct link to peer",
+				zap.Error(err),
+				zap.String("hostname", dialTo),
+			)
+
+			waiters.Enqueue(dialTo) // ensuring a retry.
+
+			continue
+		}
+
+		s.logger.Info("dialed to peer", zap.String("hostname", dialTo))
+		waiters.ResetAttempts(dialTo)
 	}
 }
 

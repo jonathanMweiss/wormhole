@@ -46,7 +46,7 @@ func NewServer(socketPath string, logger *zap.Logger, tssMessenger tss.ReliableM
 		peers:         partyIds,
 		peerToCert:    peerToCert,
 		connections:   make(map[string]*connection, len(peers)),
-		requestRedial: make(chan string, len(peers)),
+		requestRedial: make(chan redialRequest, len(peers)),
 		redials:       make(chan redialResponse, 1),
 	}, nil
 }
