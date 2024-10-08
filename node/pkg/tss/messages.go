@@ -84,6 +84,10 @@ func (i *IncomingMessage) GetSource() *tsscommv1.PartyId {
 	return i.Source
 }
 
+func newEcho(msg *tsscommv1.SignedMessage, recipients []*tsscommv1.PartyId) *Echo {
+	return &Echo{Echo: &tsscommv1.Echo{Message: msg}, Recipients: recipients}
+}
+
 // GetDestinations implements Sendable.
 func (e *Echo) GetDestinations() []*tsscommv1.PartyId {
 	return e.Recipients

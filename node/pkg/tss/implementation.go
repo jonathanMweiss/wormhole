@@ -79,6 +79,8 @@ type GuardianStorage struct {
 	SavedSecretParameters *keygen.LocalPartySaveData
 
 	LoadDistributionKey []byte
+
+	commIds []*tsscommv1.PartyId
 }
 
 func (g *GuardianStorage) contains(pid *tss.PartyID) bool {
@@ -392,10 +394,7 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 			return nil, err
 		}
 
-		sendable = &Echo{
-			Echo:       &tsscommv1.Echo{Message: msgToSend},
-			Recipients: t.allPeers(),
-		}
+		sendable = newEcho(msgToSend, t.commIds)
 	} else {
 		indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
 		for _, pId := range routing.To {
@@ -476,7 +475,7 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 	select {
 	case <-t.ctx.Done():
 		return t.ctx.Err()
-	case t.messageOutChan <- &Echo{content, t.allPeers()}:
+	case t.messageOutChan <- newEcho(content.Message, t.commIds):
 	}
 
 	return nil

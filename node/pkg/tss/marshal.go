@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/tss/internal"
 )
 
@@ -45,11 +46,15 @@ func (s *GuardianStorage) load(storagePath string) error {
 		return err
 	}
 
-	// tlsPrivateKey to signingKey.
-	s.signingKey, err = internal.PemToPrivateKey(s.PrivateKey)
+	return s.SetInnerFields()
+}
+
+func (s *GuardianStorage) SetInnerFields() error {
+	signingKey, err := internal.PemToPrivateKey(s.PrivateKey)
 	if err != nil {
 		return fmt.Errorf("error parsing tls private key: %v", err)
 	}
+	s.signingKey = signingKey
 
 	pk, err := internal.PemToPublicKey(s.Self.Key)
 	if err != nil {
@@ -60,7 +65,6 @@ func (s *GuardianStorage) load(storagePath string) error {
 		return fmt.Errorf("signing key does not match the public key stored in Self.Key")
 	}
 
-	// just to be safe.
 	if !s.signingKey.Curve.IsOnCurve(pk.X, pk.Y) {
 		return fmt.Errorf("invalid public key, it isn't on the curve")
 	}
@@ -76,7 +80,16 @@ func (s *GuardianStorage) load(storagePath string) error {
 		return fmt.Errorf("number of guardians and guardiansCerts do not match")
 	}
 
-	return s.parseCerts()
+	if err := s.parseCerts(); err != nil {
+		return err
+	}
+
+	s.commIds = make([]*tsscommv1.PartyId, len(s.Guardians))
+	for i, guardian := range s.Guardians {
+		s.commIds[i] = partyIdToProto(guardian)
+	}
+
+	return nil
 }
 
 func (s *GuardianStorage) parseCerts() error {

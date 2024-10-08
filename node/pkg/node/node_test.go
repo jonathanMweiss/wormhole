@@ -181,7 +181,10 @@ func overridePortOfTss(gs []*mockGuardian) {
 			}
 			pid.Id = idToPort[pid.Id]
 		}
+	}
 
+	for _, g := range gs {
+		g.tssEngine.(*tss.Engine).GuardianStorage.SetInnerFields()
 	}
 }
 
