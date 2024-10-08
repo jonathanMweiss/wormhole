@@ -392,14 +392,9 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 			return nil, err
 		}
 
-		dests := make([]*tsscommv1.PartyId, len(t.Guardians))
-		for i, pId := range t.Guardians {
-			dests[i] = partyIdToProto(pId)
-		}
-
 		sendable = &Echo{
 			Echo:       &tsscommv1.Echo{Message: msgToSend},
-			Recipients: dests,
+			Recipients: t.allPeers(),
 		}
 	} else {
 		indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
@@ -414,6 +409,15 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 	}
 
 	return sendable, nil
+}
+
+func (t *Engine) allPeers() []*tsscommv1.PartyId {
+	dests := make([]*tsscommv1.PartyId, len(t.Guardians))
+	for i, pId := range t.Guardians {
+		dests[i] = partyIdToProto(pId)
+	}
+
+	return dests
 }
 
 func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
@@ -472,7 +476,7 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 	select {
 	case <-t.ctx.Done():
 		return t.ctx.Err()
-	case t.messageOutChan <- &Echo{Echo: content}:
+	case t.messageOutChan <- &Echo{content, t.allPeers()}:
 	}
 
 	return nil
