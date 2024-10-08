@@ -646,29 +646,36 @@ func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
 
 // SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.
 //
-// We don't add the content of the message to the uuid, othewrwise we won't be able to detect equivocations.
+// We don't add the content of the message to the uuid, instead we collect all data that can put this message in a context.
+// this is used by the reliable broadcast to check no two messages from the same sender will be used to update the full party
+// in the same round for the specific session of the protocol.
 func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
-	d := append([]byte("tssMsgUUID:"), t.GuardianStorage.LoadDistributionKey...)
 	// The TackingID of a parsed message is tied to the run of the protocol for a single
 	//  signature, thus we use it as a sessionID.
-	msgdgst := msg.WireMsg().GetTrackingID()
-	cpy := make([]byte, len(msgdgst))
-	copy(cpy, msgdgst)
+	messageTrackingID := [trackingIDSize]byte{}
+	copy(messageTrackingID[:], msg.WireMsg().GetTrackingID())
 
-	d = append(d, cpy...)
+	fromId := [hostnameSize]byte{}
+	copy(fromId[:], msg.GetFrom().Id)
 
-	// adding the sender, ensuring it is tied to the message.
-	d = append(d, []byte(msg.GetFrom().Id)...)
-	d = append(d, msg.GetFrom().Key...)
+	fromKey := [pemKeySize]byte{}
+	copy(fromKey[:], msg.GetFrom().Key)
 
-	// Adding the round to ensure no equivocation. That is,
-	// we mustn't allow some sender j to send two different messages to the same round, in the same SessionID.
+	// Adding the round allows the same sender to send messages for different rounds.
+	// but, sender j is not allowed to send two different messages to the same round.
 	rnd, err := getRound(msg)
 	if err != nil {
 		return digest{}, err
 	}
 
-	d = append(d, []byte(rnd)...)
+	round := [signingRoundSize]byte{}
+	copy(round[:], rnd)
+
+	d := append([]byte("tssMsgUUID:"), t.GuardianStorage.LoadDistributionKey...)
+	d = append(d, messageTrackingID[:]...)
+	d = append(d, fromId[:]...)
+	d = append(d, fromKey[:]...)
+	d = append(d, round[:]...)
 
 	return hash(d), nil
 }
