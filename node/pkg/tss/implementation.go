@@ -1,7 +1,6 @@
 package tss
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -80,7 +79,10 @@ type GuardianStorage struct {
 
 	LoadDistributionKey []byte
 
-	commIds []*tsscommv1.PartyId
+	// data structures to ensure quick lookups:
+	guardiansProtoIDs []*tsscommv1.PartyId
+	guardianToCert    map[string]*x509.Certificate
+	pemkeyToGuardian  map[string]*tss.PartyID
 }
 
 func (g *GuardianStorage) contains(pid *tss.PartyID) bool {
@@ -115,13 +117,12 @@ func (t *Engine) ProducedOutputMessages() <-chan Sendable {
 }
 
 func (st *GuardianStorage) fetchPartyIdFromBytes(pk []byte) *tsscommv1.PartyId {
-	for _, pid := range st.Guardians {
-		if bytes.Equal(pid.Key, pk) {
-			return partyIdToProto(pid)
-		}
+	pid, ok := st.pemkeyToGuardian[string(pk)]
+	if !ok {
+		return nil
 	}
 
-	return nil
+	return partyIdToProto(pid)
 }
 
 func (st *GuardianStorage) FetchCertificate(pid *tsscommv1.PartyId) (*x509.Certificate, error) {
@@ -129,30 +130,28 @@ func (st *GuardianStorage) FetchCertificate(pid *tsscommv1.PartyId) (*x509.Certi
 		return nil, ErrNilPartyId
 	}
 
-	id := protoToPartyId(pid)
-	for i, v := range st.Guardians {
-		if equalPartyIds(id, v) {
-			return st.guardiansCerts[i], nil
-		}
+	cert, ok := st.guardianToCert[partyIdToString(protoToPartyId(pid))]
+	if !ok {
+		return nil, fmt.Errorf("partyID certificate not found: %v", pid)
 	}
 
-	return nil, fmt.Errorf("partyID certificate not found: %v", id)
+	return cert, nil
 }
 
 // FetchPartyId implements ReliableTSS.
 func (st *GuardianStorage) FetchPartyId(cert *x509.Certificate) (*tsscommv1.PartyId, error) {
 	var pid *tsscommv1.PartyId
 
-	switch v := cert.PublicKey.(type) {
+	switch key := cert.PublicKey.(type) {
 	case *ecdsa.PublicKey:
-		pem, err := internal.PublicKeyToPem(v)
+		publicKeyPem, err := internal.PublicKeyToPem(key)
 		if err != nil {
 			return nil, err
 		}
 
-		pid = st.fetchPartyIdFromBytes(pem)
+		pid = st.fetchPartyIdFromBytes(publicKeyPem)
 	case []byte:
-		pid = st.fetchPartyIdFromBytes(v)
+		pid = st.fetchPartyIdFromBytes(key)
 	default:
 		return nil, fmt.Errorf("unsupported public key type")
 	}
@@ -394,7 +393,7 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 			return nil, err
 		}
 
-		sendable = newEcho(msgToSend, t.commIds)
+		sendable = newEcho(msgToSend, t.guardiansProtoIDs)
 	} else {
 		indices := make([]*tsscommv1.PartyId, 0, len(routing.To))
 		for _, pId := range routing.To {
@@ -408,15 +407,6 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 	}
 
 	return sendable, nil
-}
-
-func (t *Engine) allPeers() []*tsscommv1.PartyId {
-	dests := make([]*tsscommv1.PartyId, len(t.Guardians))
-	for i, pId := range t.Guardians {
-		dests[i] = partyIdToProto(pId)
-	}
-
-	return dests
 }
 
 func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
@@ -475,7 +465,7 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 	select {
 	case <-t.ctx.Done():
 		return t.ctx.Err()
-	case t.messageOutChan <- newEcho(content.Message, t.commIds):
+	case t.messageOutChan <- newEcho(content.Message, t.guardiansProtoIDs):
 	}
 
 	return nil

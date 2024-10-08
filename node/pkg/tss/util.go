@@ -80,6 +80,10 @@ func partyIdToProto(pid *tss.PartyID) *tsscommv1.PartyId {
 	}
 }
 
+func partyIdToString(guardian *tss.PartyID) string {
+	return fmt.Sprintf("%s%x", guardian.Id, guardian.Key)
+}
+
 var (
 	ErrEchoIsNil             = fmt.Errorf("echo is nil")
 	ErrNoAuthenticationField = fmt.Errorf("SignedMessage doesn't contain an authentication field")

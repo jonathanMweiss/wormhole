@@ -10,6 +10,7 @@ import (
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/tss/internal"
+	"github.com/yossigi/tss-lib/v2/tss"
 )
 
 func (s *GuardianStorage) unmarshalFromJSON(storageData []byte) error {
@@ -84,11 +85,38 @@ func (s *GuardianStorage) SetInnerFields() error {
 		return err
 	}
 
-	s.commIds = make([]*tsscommv1.PartyId, len(s.Guardians))
+	s.guardiansProtoIDs = make([]*tsscommv1.PartyId, len(s.Guardians))
 	for i, guardian := range s.Guardians {
-		s.commIds[i] = partyIdToProto(guardian)
+		s.guardiansProtoIDs[i] = partyIdToProto(guardian)
 	}
 
+	s.guardianToCert = make(map[string]*x509.Certificate)
+	for i, guardian := range s.Guardians {
+		s.guardianToCert[partyIdToString(guardian)] = s.guardiansCerts[i]
+	}
+
+	return s.setCertToGuardian()
+}
+
+func (s *GuardianStorage) setCertToGuardian() error {
+	s.pemkeyToGuardian = make(map[string]*tss.PartyID)
+	for i, crt := range s.guardiansCerts {
+		var byteKey []byte
+		switch m := crt.PublicKey.(type) {
+		case *ecdsa.PublicKey:
+			bts, err := internal.PublicKeyToPem(m)
+			if err != nil {
+				return fmt.Errorf("error parsing guardian %v cert: %v", i, err)
+			}
+			byteKey = bts
+		case []byte:
+			byteKey = m
+		default:
+			return fmt.Errorf("error guardian %v cert stored with non-ecdsa publickey", i)
+		}
+
+		s.pemkeyToGuardian[string(byteKey)] = s.Guardians[i]
+	}
 	return nil
 }
 
