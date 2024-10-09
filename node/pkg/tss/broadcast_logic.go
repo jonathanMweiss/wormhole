@@ -28,7 +28,9 @@ type broadcaststate struct {
 	mtx *sync.Mutex
 }
 
-func (s *broadcaststate) shouldDeliver(f int) bool {
+func (t *Engine) shouldDeliver(s *broadcaststate) bool {
+	f := t.GuardianStorage.getMaxExpectedFaults()
+
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
@@ -47,13 +49,25 @@ func (s *broadcaststate) shouldDeliver(f int) bool {
 
 var ErrEquivicatingGuardian = fmt.Errorf("equivication, guardian sent two different messages for the same round and session")
 
-func (s *broadcaststate) updateState(f int, msg *tsscommv1.SignedMessage, echoer *tsscommv1.PartyId) (shouldEcho bool, err error) {
-	isMsgSrc := equalPartyIds(protoToPartyId(echoer), protoToPartyId(msg.Sender))
-
-	// checking outside of lock since s.messageDigest is read only after creation.
+func (t *Engine) updateState(s *broadcaststate, msg *tsscommv1.SignedMessage, echoer *tsscommv1.PartyId) (shouldEcho bool, err error) {
+	// this is a SECURITY measure to prevent equivication attacks:
+	// It is possible that the same guardian sends two different messages for the same round and session.
+	// We do not accept messages with the same uuid and different content.
 	if s.messageDigest != hashSignedMessage(msg) {
-		return false, fmt.Errorf("%w: %v", ErrEquivicatingGuardian, echoer)
+		if err := t.verifySignedMessage(msg); err == nil { // no error means the sender is the equivicator.
+			return false, fmt.Errorf("%w:%v", ErrEquivicatingGuardian, msg.Sender)
+		}
+
+		return false, fmt.Errorf("%w:%v", ErrEquivicatingGuardian, echoer)
 	}
+
+	f := t.GuardianStorage.getMaxExpectedFaults()
+
+	return s.update(echoer, msg, f)
+}
+
+func (s *broadcaststate) update(echoer *tsscommv1.PartyId, msg *tsscommv1.SignedMessage, f int) (shouldEcho bool, err error) {
+	isMsgSrc := equalPartyIds(protoToPartyId(echoer), protoToPartyId(msg.Sender))
 
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
@@ -104,14 +118,13 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 
 	// If we weren't using TLS - at this point we would have to verify the
 	// signature of the echoer (sender).
-	f := t.GuardianStorage.getMaxExpectedFaults()
 
-	allowedToBroadcast, err := state.updateState(f, signed, echoer)
+	allowedToBroadcast, err := t.updateState(state, signed, echoer)
 	if err != nil {
 		return false, false, err
 	}
 
-	if state.shouldDeliver(f) {
+	if t.shouldDeliver(state) {
 		return allowedToBroadcast, true, nil
 	}
 

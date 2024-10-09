@@ -231,6 +231,12 @@ func TestEquivocation(t *testing.T) {
 			a.ErrorAs(err, &ErrEquivicatingGuardian)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
+
+			equvicatingEchoerMessage := parsedIntoEcho(a, e2, parsed1)
+			equvicatingEchoerMessage.Content.GetEcho().Message.Content.Payload[0] += 1
+			// now echoer is equivicating (change content, but of some seen message):
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, equvicatingEchoerMessage)
+			a.ErrorContains(err, e2.Self.Id)
 		}
 	})
 

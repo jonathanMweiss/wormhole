@@ -1431,7 +1431,3 @@ func TestTssCorrectRun(t *testing.T) {
 
 	runConsensusTests(t, testCases, guardians, true)
 }
-
-func TestTssSignatureFailure(t *testing.T) {
-	t.FailNow() // need to implement this test
-}

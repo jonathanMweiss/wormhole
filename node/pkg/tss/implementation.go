@@ -571,7 +571,7 @@ func (t *Engine) handleUnicast(m Incoming) error {
 
 	if err != nil {
 		return logableError{
-			fmt.Errorf("failed to ensure no equivication present in unicast: %w", err),
+			fmt.Errorf("failed to ensure no equivication present in unicast: %w, sender:%v", err, m.GetSource().Id),
 			parsed.WireMsg().GetTrackingID(),
 			rnd,
 		}
