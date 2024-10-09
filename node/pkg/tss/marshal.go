@@ -55,6 +55,7 @@ func (s *GuardianStorage) SetInnerFields() error {
 	if err != nil {
 		return fmt.Errorf("error parsing tls private key: %v", err)
 	}
+
 	s.signingKey = signingKey
 
 	pk, err := internal.PemToPublicKey(s.Self.Key)
@@ -102,12 +103,14 @@ func (s *GuardianStorage) setCertToGuardian() error {
 	s.pemkeyToGuardian = make(map[string]*tss.PartyID)
 	for i, crt := range s.guardiansCerts {
 		var byteKey []byte
+
 		switch m := crt.PublicKey.(type) {
 		case *ecdsa.PublicKey:
 			bts, err := internal.PublicKeyToPem(m)
 			if err != nil {
 				return fmt.Errorf("error parsing guardian %v cert: %v", i, err)
 			}
+
 			byteKey = bts
 		case []byte:
 			byteKey = m
@@ -117,6 +120,7 @@ func (s *GuardianStorage) setCertToGuardian() error {
 
 		s.pemkeyToGuardian[string(byteKey)] = s.Guardians[i]
 	}
+
 	return nil
 }
 
