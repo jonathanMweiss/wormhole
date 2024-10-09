@@ -470,32 +470,12 @@ func (p *Processor) processTssSignature(sig *tsscommon.SignatureData) {
 		return
 	}
 
-	signature, err := p.validateTssSignature(sig)
-	if err != nil {
-		p.logger.Error("tss signature failed", zap.Error(err), zap.String("vaaID", wtr.vaa.UniqueID()))
-		return
-	}
+	// signature is verified by tss.engine's threshold signature implementation already, so we can treat it as valid.
+	signature := append(sig.Signature, sig.SignatureRecovery...)
 
-	// TODO: Should we return a signature already in the correct format from the TssEngine? or giving the processor more control is better?
 	vaaSig := &vaa.Signature{}
 	copy(vaaSig.Signature[:], signature)
 
 	// using single signature, since it was reached via threshold signing.
 	wtr.vaa.HandleQuorum([]*vaa.Signature{vaaSig}, hash, p)
-}
-
-func (p *Processor) validateTssSignature(sig *tsscommon.SignatureData) ([]byte, error) {
-	signature := append(sig.Signature, sig.SignatureRecovery...)
-
-	// TODO: Discuss with @yossigi if we should use actually validate the signature. It is already done in the fullParty in finilized.go
-	// pubKey, err := crypto.Ecrecover(sig.M, signature)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// if ethcommon.BytesToAddress(crypto.Keccak256(pubKey[1:])[12:]) != p.thresholdSigner.GetEthAddress() {
-	// 	return nil, fmt.Errorf("ecRecovered public key does not match threshold signer")
-	// }
-
-	return signature, nil
 }
