@@ -165,7 +165,6 @@ func setupPlayers(a *assert.Assertions) []*dkgSetupPlayer {
 }
 
 func genPlayers(orderedKeysByPublicKey []*ecdsa.PrivateKey) []*dkgSetupPlayer {
-	// TODO: Set up certificates in here.
 	all := make([]*dkgSetupPlayer, Participants)
 	partyIDS := make(tss.UnSortedPartyIDs, Participants)
 	for i := 0; i < Participants; i++ {

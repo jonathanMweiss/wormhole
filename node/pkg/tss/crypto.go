@@ -31,7 +31,6 @@ func hashSignedMessage(msg *tsscommv1.SignedMessage) digest {
 	pid := msg.Sender
 	b.Write([]byte(pid.Id))
 	b.Write(pid.Key)
-	/// TODO: discuss with Yossi if we need to write moniker and index too.
 
 	return hash(b.Bytes())
 }

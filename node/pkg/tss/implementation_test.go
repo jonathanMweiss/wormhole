@@ -782,7 +782,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						if addr != address {
 							panic("recovered address does not match provided address")
 						}
-						return // TODO verify signature.
+						return
 					case <-signalSuccess:
 						return
 					}
