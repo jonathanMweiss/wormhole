@@ -26,14 +26,24 @@ type VAAID struct {
 	EmitterChain   vaa.ChainID
 	EmitterAddress vaa.Address
 	Sequence       uint64
-	Version        uint32
+	Version        *uint32
 }
 
 // VaaIDFromString parses a <chain>/<address>/<sequence> string into a VAAID.
 func VaaIDFromString(s string) (*VAAID, error) {
 	parts := strings.Split(s, "/")
-	if len(parts) != 3 {
+	if len(parts) != 3 && len(parts) != 4 {
 		return nil, errors.New("invalid message id")
+	}
+
+	vaaVersion := uint32(vaa.MultiSigVaaVersion)
+	if len(parts) == 4 {
+		v, err := strconv.Atoi(parts[3])
+		if err != nil {
+			return nil, fmt.Errorf("invalid vaa version: %s", err)
+		}
+
+		vaaVersion = uint32(v)
 	}
 
 	emitterChain, err := strconv.ParseUint(parts[0], 10, 16)
@@ -55,17 +65,19 @@ func VaaIDFromString(s string) (*VAAID, error) {
 		EmitterChain:   vaa.ChainID(emitterChain),
 		EmitterAddress: emitterAddress,
 		Sequence:       sequence,
+		Version:        &vaaVersion,
 	}
 
 	return msgId, nil
 }
 
 func VaaIDFromVAA(v *vaa.VAA) *VAAID {
+	ver := uint32(v.Version)
 	return &VAAID{
 		EmitterChain:   v.EmitterChain,
 		EmitterAddress: v.EmitterAddress,
 		Sequence:       v.Sequence,
-		Version:        uint32(v.Version),
+		Version:        &ver,
 	}
 }
 
@@ -75,15 +87,30 @@ var (
 )
 
 func (i *VAAID) Bytes() []byte {
-	tmp := []byte(fmt.Sprintf("signed/%d/%s/%d/%d", i.EmitterChain, i.EmitterAddress, i.Sequence, i.Version))
+	tmp := []byte(fmt.Sprintf("signed/%d/%s/%d", i.EmitterChain, i.EmitterAddress, i.Sequence))
+	if i.stringRepHasVaaVersion() {
+		tmp = append(tmp, fmt.Sprintf("/%d", *i.Version)...)
+	}
+
 	return tmp
 }
 
+func (i *VAAID) stringRepHasVaaVersion() bool {
+	// MultiSigVAA didn't add version to the ID (backward compatibility).
+	return i.Version != nil && *i.Version != vaa.MultiSigVaaVersion
+}
 func (i *VAAID) EmitterPrefixBytes() []byte {
 	if i.EmitterAddress == nullAddr {
 		return []byte(fmt.Sprintf("signed/%d", i.EmitterChain))
 	}
-	return []byte(fmt.Sprintf("signed/%d/%s", i.EmitterChain, i.EmitterAddress))
+
+	bts := []byte(fmt.Sprintf("signed/%d/%s", i.EmitterChain, i.EmitterAddress))
+
+	if i.stringRepHasVaaVersion() {
+		bts = append(bts, fmt.Sprintf("/%d", *i.Version)...)
+	}
+
+	return bts
 }
 
 // TODO: Deprecate in favor of OpenDb
