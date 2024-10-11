@@ -563,17 +563,17 @@ const (
 	minHeadlessVAALength = 51 // HEADER
 	minVAALength         = 57 // HEADER + BODY
 
-	// VaaVersion1 depicts a VAA generated with multi-signatures, where each
+	// MultiSigVaaVersion depicts a VAA generated with multi-signatures, where each
 	// guardian adds its signature. A valid VAA should have quorumSize
 	// signatures from its guardians.
-	VaaVersion1 = 0x01
+	MultiSigVaaVersion = 0x01
 
 	// TSSVaaVersion uses a threshold signature scheme to sign the VAA struct.
 	// As a result, a valid VAA would result in a single signature.
 	TSSVaaVersion = 0x02
 )
 
-var SupportedVAAVersions = map[uint8]bool{VaaVersion1: true, TSSVaaVersion: true}
+var SupportedVAAVersions = map[uint8]bool{MultiSigVaaVersion: true, TSSVaaVersion: true}
 
 // UnmarshalBody deserializes the binary representation of a VAA's "BODY" properties
 // The BODY fields are common among multiple types of VAA - v1, v2, etc
@@ -802,7 +802,7 @@ func (v *VAA) Verify(addresses []common.Address) error {
 	var err error = nil
 
 	switch v.Version {
-	case VaaVersion1:
+	case MultiSigVaaVersion:
 		err = v.v1Validation(addresses)
 	case TSSVaaVersion:
 		err = v.tssValidation(addresses)

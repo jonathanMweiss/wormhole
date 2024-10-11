@@ -891,7 +891,7 @@ func pollApiAndInspectVaa(t *testing.T, ctx context.Context, msg *common.Message
 		EmitterChain:   publicrpcv1.ChainID(msg.EmitterChain),
 		EmitterAddress: msg.EmitterAddress.String(),
 		Sequence:       msg.Sequence,
-		Version:        uint32(vaa.VaaVersion1),
+		Version:        uint32(vaa.MultiSigVaaVersion),
 	}
 	if testCase.tssVaaVersionChecks {
 		msgId.Version = uint32(vaa.TSSVaaVersion)
