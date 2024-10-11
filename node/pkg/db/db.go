@@ -26,7 +26,7 @@ type VAAID struct {
 	EmitterChain   vaa.ChainID
 	EmitterAddress vaa.Address
 	Sequence       uint64
-	Version        *uint32
+	Version        *uint8
 }
 
 // VaaIDFromString parses a <chain>/<address>/<sequence> string into a VAAID.
@@ -36,14 +36,14 @@ func VaaIDFromString(s string) (*VAAID, error) {
 		return nil, errors.New("invalid message id")
 	}
 
-	vaaVersion := uint32(vaa.MultiSigVaaVersion)
+	vaaVersion := uint8(vaa.MultiSigVaaVersion)
 	if len(parts) == 4 {
-		v, err := strconv.Atoi(parts[3])
+		v, err := strconv.ParseUint(parts[3], 10, 8)
 		if err != nil {
 			return nil, fmt.Errorf("invalid vaa version: %s", err)
 		}
 
-		vaaVersion = uint32(v)
+		vaaVersion = uint8(v)
 	}
 
 	emitterChain, err := strconv.ParseUint(parts[0], 10, 16)
@@ -72,7 +72,7 @@ func VaaIDFromString(s string) (*VAAID, error) {
 }
 
 func VaaIDFromVAA(v *vaa.VAA) *VAAID {
-	ver := uint32(v.Version)
+	ver := v.Version
 	return &VAAID{
 		EmitterChain:   v.EmitterChain,
 		EmitterAddress: v.EmitterAddress,
@@ -96,9 +96,9 @@ func (i *VAAID) Bytes() []byte {
 }
 
 func (i *VAAID) stringRepHasVaaVersion() bool {
-	// MultiSigVAA didn't add version to the ID (backward compatibility).
-	return i.Version != nil && *i.Version != vaa.MultiSigVaaVersion
+	return vaa.VersionHasStringRepresentation(i.Version)
 }
+
 func (i *VAAID) EmitterPrefixBytes() []byte {
 	if i.EmitterAddress == nullAddr {
 		return []byte(fmt.Sprintf("signed/%d", i.EmitterChain))
