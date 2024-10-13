@@ -40,10 +40,14 @@ func VaaIDFromString(s string) (*VAAID, error) {
 	if len(parts) == 4 {
 		v, err := strconv.ParseUint(parts[3], 10, 8)
 		if err != nil {
-			return nil, fmt.Errorf("invalid vaa version: %s", err)
+			return nil, fmt.Errorf("invalid vaa version: %w", err)
 		}
 
 		vaaVersion = uint8(v)
+
+		if !vaa.SupportedVAAVersions[vaaVersion] {
+			return nil, fmt.Errorf("unsupported vaa version: %d", vaaVersion)
+		}
 	}
 
 	emitterChain, err := strconv.ParseUint(parts[0], 10, 16)
@@ -104,13 +108,7 @@ func (i *VAAID) EmitterPrefixBytes() []byte {
 		return []byte(fmt.Sprintf("signed/%d", i.EmitterChain))
 	}
 
-	bts := []byte(fmt.Sprintf("signed/%d/%s", i.EmitterChain, i.EmitterAddress))
-
-	if i.stringRepHasVaaVersion() {
-		bts = append(bts, fmt.Sprintf("/%d", *i.Version)...)
-	}
-
-	return bts
+	return []byte(fmt.Sprintf("signed/%d/%s", i.EmitterChain, i.EmitterAddress))
 }
 
 // TODO: Deprecate in favor of OpenDb
