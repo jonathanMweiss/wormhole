@@ -38,7 +38,8 @@ type Engine struct {
 	fp       party.FullParty
 
 	fpOutChan      chan tss.Message
-	fpSigOutChan   chan *common.SignatureData
+	fpSigOutChan   chan *common.SignatureData // output inspected in fpListener.
+	sigOutChan     chan *common.SignatureData // actual sig output.
 	messageOutChan chan Sendable
 	fpErrChannel   chan *tss.Error // used to log issues from the FullParty.
 
@@ -48,6 +49,8 @@ type Engine struct {
 	// used to perform reliable broadcast:
 	mtx      *sync.Mutex
 	received map[digest]*broadcaststate
+
+	sigCounter activeSigCounter
 }
 
 type PEM []byte
@@ -83,6 +86,8 @@ type GuardianStorage struct {
 	guardiansProtoIDs []*tsscommv1.PartyId
 	guardianToCert    map[string]*x509.Certificate
 	pemkeyToGuardian  map[string]*tss.PartyID
+
+	MaxSimultaneousSignatures int
 }
 
 func (g *GuardianStorage) contains(pid *tss.PartyID) bool {
@@ -108,7 +113,7 @@ func NewGuardianStorageFromFile(storagePath string) (*GuardianStorage, error) {
 
 // ProducedSignature lets a listener receive the output signatures once they're ready.
 func (t *Engine) ProducedSignature() <-chan *common.SignatureData {
-	return t.fpSigOutChan
+	return t.sigOutChan
 }
 
 // ProducedOutputMessages ensures a listener can send the output messages to the network.
@@ -213,6 +218,10 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		return nil, fmt.Errorf("the guardian's tss storage is nil")
 	}
 
+	if storage.MaxSimultaneousSignatures <= 0 { // setting default value.
+		storage.MaxSimultaneousSignatures = defaultMaxLiveSignatures
+	}
+
 	fpParams := &party.Parameters{
 		SavedSecrets:         storage.SavedSecretParameters,
 		PartyIDs:             storage.Guardians,
@@ -228,10 +237,6 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		return nil, err
 	}
 
-	fpOutChan := make(chan tss.Message) // this one must listen on it, and output to the p2p network.
-	fpSigOutChan := make(chan *common.SignatureData)
-	fpErrChannel := make(chan *tss.Error)
-
 	t := &Engine{
 		ctx: nil,
 
@@ -240,9 +245,10 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 
 		fpParams:        fpParams,
 		fp:              fp,
-		fpOutChan:       fpOutChan,
-		fpSigOutChan:    fpSigOutChan,
-		fpErrChannel:    fpErrChannel,
+		fpOutChan:       make(chan tss.Message),
+		fpSigOutChan:    make(chan *common.SignatureData),
+		sigOutChan:      make(chan *common.SignatureData),
+		fpErrChannel:    make(chan *tss.Error),
 		messageOutChan:  make(chan Sendable),
 		msgSerialNumber: 0,
 		mtx:             &sync.Mutex{},
@@ -316,44 +322,67 @@ func (t *Engine) fpListener() {
 			return
 
 		case m := <-t.fpOutChan:
-			tssMsg, err := t.intoSendable(m)
-			if err == nil {
-				t.messageOutChan <- tssMsg
-
-				continue
-			}
-			// else log error:
-			lgErr := logableError{
-				fmt.Errorf("failed to convert tss message and send it to network: %w", err),
-				m.WireMsg().GetTrackingID(),
-				"",
-			}
-
-			// The following should always pass, since FullParty outputs a
-			// tss.ParsedMessage and a valid message with a specific round.
-			if parsed, ok := m.(tss.ParsedMessage); ok {
-				if rnd, e := getRound(parsed); e == nil {
-					lgErr.round = rnd
-				}
-			}
-
-			logErr(t.logger, lgErr)
-
+			t.handleFpOutput(m)
 		case err := <-t.fpErrChannel:
-			if err == nil {
-				continue // shouldn't happen. safety.
-			}
-
-			logErr(t.logger, &logableError{
-				fmt.Errorf("error in signing protocol: %w", err.Cause()),
-				err.TrackingId(),
-				intToRound(err.Round()),
-			})
-
+			t.handleFpError(err)
+		case sig := <-t.fpSigOutChan:
+			t.hansleFpSignature(sig)
 		case <-cleanUpTicker.C:
 			t.cleanup()
 		}
 	}
+}
+
+func (t *Engine) hansleFpSignature(sig *common.SignatureData) {
+	if sig == nil {
+		return
+	}
+
+	select {
+	case <-t.ctx.Done():
+	case t.sigOutChan <- sig:
+	}
+}
+
+func (t *Engine) handleFpError(err *tss.Error) {
+	if err == nil {
+		return
+	}
+
+	logErr(t.logger, &logableError{
+		fmt.Errorf("error in signing protocol: %w", err.Cause()),
+		err.TrackingId(),
+		intToRound(err.Round()),
+	})
+}
+
+func (t *Engine) handleFpOutput(m tss.Message) {
+	tssMsg, err := t.intoSendable(m)
+	if err == nil {
+		select {
+		case t.messageOutChan <- tssMsg:
+		case <-t.ctx.Done():
+		}
+
+		return
+	}
+
+	// else log error:
+	lgErr := logableError{
+		fmt.Errorf("failed to convert tss message and send it to network: %w", err),
+		m.WireMsg().GetTrackingID(),
+		"",
+	}
+
+	// The following should always pass, since FullParty outputs a
+	// tss.ParsedMessage and a valid message with a specific round.
+	if parsed, ok := m.(tss.ParsedMessage); ok {
+		if rnd, e := getRound(parsed); e == nil {
+			lgErr.round = rnd
+		}
+	}
+
+	logErr(t.logger, lgErr)
 }
 
 func (t *Engine) cleanup() {
@@ -365,6 +394,8 @@ func (t *Engine) cleanup() {
 			// althoug delete doesn't reduce the size of the underlying map
 			// it is good enough since this map contains many entries, and it'll be wastefull to let a new map grow again.
 			delete(t.received, k)
+
+			//TODO: t.sigCounter.remove(k[:])
 		}
 	}
 }
@@ -518,7 +549,7 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 		return shouldEcho, nil
 	}
 
-	if err := t.fp.Update(parsed); err != nil {
+	if err := t.updateFp(parsed); err != nil {
 		return shouldEcho, logableError{
 			fmt.Errorf("failed to update the full party: %w", err),
 			parsed.WireMsg().GetTrackingID(),
@@ -527,6 +558,19 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	}
 
 	return shouldEcho, nil
+}
+
+func (t *Engine) updateFp(parsed tss.ParsedMessage) error {
+	trackId := parsed.WireMsg().TrackingID
+	from := parsed.GetFrom()
+	maxLiveSignatures := t.GuardianStorage.MaxSimultaneousSignatures
+
+	// TODO: traackID?
+	if ok := t.sigCounter.add(trackId, from, maxLiveSignatures); ok {
+		return t.fp.Update(parsed)
+	}
+
+	return fmt.Errorf("guardian %v has reached the maximum number of simultaneous signatures", from.Id)
 }
 
 var errUnicastBadRound = fmt.Errorf("bad round for unicast (can accept round1Message1 and round2Message)")
@@ -577,7 +621,7 @@ func (t *Engine) handleUnicast(m Incoming) error {
 		}
 	}
 
-	if err := t.fp.Update(parsed); err != nil {
+	if err := t.updateFp(parsed); err != nil {
 		return logableError{
 			fmt.Errorf("unicast failed to update the full party: %w", err),
 			parsed.WireMsg().GetTrackingID(),
