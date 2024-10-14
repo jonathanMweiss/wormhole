@@ -11,4 +11,6 @@ const (
 	pemKeySize       = 178
 	trackingIDSize   = 32
 	signingRoundSize = 8
+
+	defaultMaxLiveSignatures = 1000
 )
