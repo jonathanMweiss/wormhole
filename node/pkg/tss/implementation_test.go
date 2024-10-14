@@ -235,7 +235,7 @@ func TestEquivocation(t *testing.T) {
 			equvicatingEchoerMessage := parsedIntoEcho(a, e2, parsed1)
 			equvicatingEchoerMessage.Content.GetEcho().Message.Content.Payload[0] += 1
 			// now echoer is equivicating (change content, but of some seen message):
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, equvicatingEchoerMessage)
+			_, _, err = e1.relbroadcastInspection(parsed1, equvicatingEchoerMessage)
 			a.ErrorContains(err, e2.Self.Id)
 		}
 	})
@@ -476,19 +476,19 @@ func TestCleanup(t *testing.T) {
 	engines := loadGuardians(a)
 	e1 := engines[0]
 
-	e1.received[digest{1}] = &broadcaststate{
+	e1.received[uuid{1}] = &broadcaststate{
 		timeReceived: time.Now().Add(time.Minute * 10 * (-1)),
 	}
-	e1.received[digest{2}] = &broadcaststate{
+	e1.received[uuid{2}] = &broadcaststate{
 		timeReceived: time.Now(),
 	}
 
 	e1.cleanup()
 	a.Len(e1.received, 1)
-	_, ok := e1.received[digest{1}]
+	_, ok := e1.received[uuid{1}]
 	a.False(ok)
 
-	_, ok = e1.received[digest{2}]
+	_, ok = e1.received[uuid{2}]
 	a.True(ok)
 }
 

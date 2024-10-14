@@ -33,8 +33,17 @@ type activeSigCounter struct {
 	guardianToDigests map[strPartyId]set[strDigest]
 }
 
+func newSigCounter() activeSigCounter {
+	return activeSigCounter{
+		mtx: sync.RWMutex{},
+
+		digestToGuardians: make(map[strDigest]set[strPartyId]),
+		guardianToDigests: make(map[strPartyId]set[strDigest]),
+	}
+}
+
 func idToString(id *tss.PartyID) strPartyId {
-	return strPartyId(fmt.Sprint("%s%x", id.Id, id.Key))
+	return strPartyId(fmt.Sprintf("%s%x", id.Id, id.Key))
 }
 
 // Add adds a guardian to the counter for a given digest.

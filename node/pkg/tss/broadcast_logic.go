@@ -131,7 +131,7 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 	return allowedToBroadcast, false, nil
 }
 
-func (t *Engine) fetchState(d digest, signed *tsscommv1.SignedMessage) (*broadcaststate, error) {
+func (t *Engine) fetchState(d uuid, signed *tsscommv1.SignedMessage) (*broadcaststate, error) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 	state, ok := t.received[d]

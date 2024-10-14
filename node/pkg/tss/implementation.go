@@ -25,6 +25,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type uuid digest // distinguishing between types to avoid confusion.
+
 // Engine is the implementation of reliableTSS, it is a wrapper for the
 // tss-lib fullParty and adds reliable broadcast logic
 // to the message sending and receiving.
@@ -48,7 +50,7 @@ type Engine struct {
 
 	// used to perform reliable broadcast:
 	mtx      *sync.Mutex
-	received map[digest]*broadcaststate
+	received map[uuid]*broadcaststate
 
 	sigCounter activeSigCounter
 }
@@ -252,9 +254,11 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		messageOutChan:  make(chan Sendable),
 		msgSerialNumber: 0,
 		mtx:             &sync.Mutex{},
-		received:        map[digest]*broadcaststate{},
+		received:        map[uuid]*broadcaststate{},
 
 		started: atomic.Uint32{}, // default value is 0
+
+		sigCounter: newSigCounter(),
 	}
 
 	return t, nil
@@ -693,7 +697,7 @@ func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
 // We don't add the content of the message to the uuid, instead we collect all data that can put this message in a context.
 // this is used by the reliable broadcast to check no two messages from the same sender will be used to update the full party
 // in the same round for the specific session of the protocol.
-func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
+func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (uuid, error) {
 	// The TackingID of a parsed message is tied to the run of the protocol for a single
 	//  signature, thus we use it as a sessionID.
 	messageTrackingID := [trackingIDSize]byte{}
@@ -709,7 +713,7 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 	// but, sender j is not allowed to send two different messages to the same round.
 	rnd, err := getRound(msg)
 	if err != nil {
-		return digest{}, err
+		return uuid{}, err
 	}
 
 	round := [signingRoundSize]byte{}
@@ -721,7 +725,7 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (digest, error) {
 	d = append(d, fromKey[:]...)
 	d = append(d, round[:]...)
 
-	return hash(d), nil
+	return uuid(hash(d)), nil
 }
 
 func (t *Engine) parseUnicast(m Incoming) (tss.ParsedMessage, error) {
