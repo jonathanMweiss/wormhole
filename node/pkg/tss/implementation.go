@@ -368,6 +368,8 @@ func (t *Engine) handleFpSignature(sig *common.SignatureData) {
 	sigProducedCntr.Inc()
 	inProgressSigs.Dec()
 
+	t.sigCounter.remove(sig.TrackingId)
+
 	select {
 	case <-t.ctx.Done():
 	case t.sigOutChan <- sig:
@@ -379,9 +381,15 @@ func (t *Engine) handleFpError(err *tss.Error) {
 		return
 	}
 
+	trackid := err.TrackingId()
+
+	// if someone sent a message that caused an error -> we don't
+	// accept an override to that message, therefore, we can remove it, since it won't change.
+	t.sigCounter.remove(trackid)
+
 	logErr(t.logger, &logableError{
 		fmt.Errorf("error in signing protocol: %w", err.Cause()),
-		err.TrackingId(),
+		trackid,
 		intToRound(err.Round()),
 	})
 }
@@ -426,7 +434,8 @@ func (t *Engine) cleanup(maxTTL time.Duration) {
 			// it is good enough since this map contains many entries, and it'll be wastefull to let a new map grow again.
 			delete(t.received, k)
 
-			//TODO: t.sigCounter.remove(k[:])
+			// since the fullParty deleted its state, we can remove the sigCounter entry.
+			t.sigCounter.remove(v.trackingId)
 		}
 	}
 }
