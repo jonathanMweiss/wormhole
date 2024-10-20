@@ -39,6 +39,7 @@ type Engine struct {
 
 	fpOutChan      chan tss.Message
 	fpSigOutChan   chan *common.SignatureData
+	sigOutChan     chan *common.SignatureData
 	messageOutChan chan Sendable
 	fpErrChannel   chan *tss.Error // used to log issues from the FullParty.
 
@@ -112,7 +113,7 @@ func NewGuardianStorageFromFile(storagePath string) (*GuardianStorage, error) {
 
 // ProducedSignature lets a listener receive the output signatures once they're ready.
 func (t *Engine) ProducedSignature() <-chan *common.SignatureData {
-	return t.fpSigOutChan
+	return t.sigOutChan
 }
 
 // ProducedOutputMessages ensures a listener can send the output messages to the network.
@@ -209,7 +210,17 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	d := party.Digest{}
 	copy(d[:], vaaDigest)
 
-	return t.fp.AsyncRequestNewSignature(d)
+	err := t.fp.AsyncRequestNewSignature(d)
+	if err == nil {
+		inProgressSigs.Inc()
+		return nil
+	}
+
+	if err == party.ErrNotInSigningCommittee { // no need to return error in this case.
+		return nil
+	}
+
+	return err
 }
 
 func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
@@ -236,10 +247,6 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		return nil, err
 	}
 
-	fpOutChan := make(chan tss.Message) // this one must listen on it, and output to the p2p network.
-	fpSigOutChan := make(chan *common.SignatureData)
-	fpErrChannel := make(chan *tss.Error)
-
 	t := &Engine{
 		ctx: nil,
 
@@ -248,9 +255,10 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 
 		fpParams:        fpParams,
 		fp:              fp,
-		fpOutChan:       fpOutChan,
-		fpSigOutChan:    fpSigOutChan,
-		fpErrChannel:    fpErrChannel,
+		fpOutChan:       make(chan tss.Message),
+		fpSigOutChan:    make(chan *common.SignatureData),
+		sigOutChan:      make(chan *common.SignatureData),
+		fpErrChannel:    make(chan *tss.Error),
 		messageOutChan:  make(chan Sendable),
 		msgSerialNumber: 0,
 		mtx:             &sync.Mutex{},
@@ -333,6 +341,7 @@ func (t *Engine) fpListener() {
 			tssMsg, err := t.intoSendable(m)
 			if err == nil {
 				t.messageOutChan <- tssMsg
+				sentMsgCntr.Inc()
 
 				continue
 			}
@@ -363,6 +372,12 @@ func (t *Engine) fpListener() {
 				err.TrackingId(),
 				intToRound(err.Round()),
 			})
+
+		case sig := <-t.fpSigOutChan:
+			t.sigOutChan <- sig
+
+			sigProducedCntr.Inc()
+			inProgressSigs.Dec()
 
 		case <-cleanUpTicker.C:
 			t.cleanup(maxTTL)
@@ -431,6 +446,8 @@ func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
 	if t.started.Load() != started {
 		return // TODO: Consider what to do.
 	}
+
+	receivedMsgCntr.Inc()
 
 	if err := t.handleIncomingTssMessage(msg); err != nil {
 		logErr(t.logger, err)
@@ -531,6 +548,8 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	if !shouldDeliver {
 		return shouldEcho, nil
 	}
+
+	deliveredMsgCntr.Inc()
 
 	if err := t.fp.Update(parsed); err != nil {
 		return shouldEcho, logableError{
