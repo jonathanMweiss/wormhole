@@ -1,5 +1,7 @@
 package tss
 
+import "time"
+
 const (
 	digestSize = 32
 
@@ -13,4 +15,6 @@ const (
 	signingRoundSize = 8
 
 	defaultMaxLiveSignatures = 1000
+
+	defaultMaxSignerTTL = time.Minute * 5
 )

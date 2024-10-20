@@ -84,6 +84,10 @@ type GuardianStorage struct {
 
 	LoadDistributionKey []byte
 
+	// MaxSignerTTL is the maximum time a signer is allowed to be active.
+	// used to release resources.
+	MaxSignerTTL time.Duration
+
 	// data structures to ensure quick lookups:
 	guardiansProtoIDs []*tsscommv1.PartyId
 	guardianToCert    map[string]*x509.Certificate
@@ -212,7 +216,17 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	d := party.Digest{}
 	copy(d[:], vaaDigest)
 
-	return t.fp.AsyncRequestNewSignature(d)
+	err := t.fp.AsyncRequestNewSignature(d)
+	if err == nil {
+		inProgressSigs.Inc()
+		return nil
+	}
+
+	if err == party.ErrNotInSigningCommittee { // no need to return error in this case.
+		return nil
+	}
+
+	return err
 }
 
 func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
@@ -220,8 +234,12 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		return nil, fmt.Errorf("the guardian's tss storage is nil")
 	}
 
-	if storage.MaxSimultaneousSignatures <= 0 { // setting default value.
+	if storage.MaxSimultaneousSignatures <= 0 {
 		storage.MaxSimultaneousSignatures = defaultMaxLiveSignatures
+	}
+
+	if storage.MaxSignerTTL == 0 {
+		storage.MaxSignerTTL = defaultMaxSignerTTL
 	}
 
 	fpParams := &party.Parameters{
@@ -229,8 +247,8 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		PartyIDs:             storage.Guardians,
 		Self:                 storage.Self,
 		Threshold:            storage.Threshold,
-		WorkDir:              "",
-		MaxSignerTTL:         time.Minute * 5,
+		WorkDir:              "", // set to empty since we don't support DKG/reshare protocol yet.
+		MaxSignerTTL:         storage.MaxSignerTTL,
 		LoadDistributionSeed: storage.LoadDistributionKey,
 	}
 
@@ -309,8 +327,14 @@ func (t *Engine) GetEthAddress() ethcommon.Address {
 // fpListener serves as a listining loop for the full party outputs.
 // ensures the FP isn't being blocked on writing to fpOutChan, and wraps the result into a gossip message.
 func (t *Engine) fpListener() {
-	// using a few more seconds to ensure
-	cleanUpTicker := time.NewTicker(t.fpParams.MaxSignerTTL + time.Second*5)
+	// SECURITY NOTE: when we clean the guardian map from received Echo's
+	// we must use TTL > FullParty.TTL to ensure guardians can't use
+	// the deletion time to perform equivication attacks (since a message
+	// has no record after it was deleted).
+	// *2 is to account for possible offset in the time of the guardian.
+	maxTTL := t.GuardianStorage.MaxSignerTTL * 2
+
+	cleanUpTicker := time.NewTicker(maxTTL)
 
 	for {
 		select {
@@ -324,23 +348,25 @@ func (t *Engine) fpListener() {
 			cleanUpTicker.Stop()
 
 			return
-
 		case m := <-t.fpOutChan:
 			t.handleFpOutput(m)
 		case err := <-t.fpErrChannel:
 			t.handleFpError(err)
 		case sig := <-t.fpSigOutChan:
-			t.hansleFpSignature(sig)
+			t.handleFpSignature(sig)
 		case <-cleanUpTicker.C:
-			t.cleanup()
+			t.cleanup(maxTTL)
 		}
 	}
 }
 
-func (t *Engine) hansleFpSignature(sig *common.SignatureData) {
+func (t *Engine) handleFpSignature(sig *common.SignatureData) {
 	if sig == nil {
 		return
 	}
+
+	sigProducedCntr.Inc()
+	inProgressSigs.Dec()
 
 	select {
 	case <-t.ctx.Done():
@@ -389,12 +415,13 @@ func (t *Engine) handleFpOutput(m tss.Message) {
 	logErr(t.logger, lgErr)
 }
 
-func (t *Engine) cleanup() {
+func (t *Engine) cleanup(maxTTL time.Duration) {
+
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
 	for k, v := range t.received {
-		if time.Since(v.timeReceived) > time.Minute*5 {
+		if time.Since(v.timeReceived) > maxTTL {
 			// althoug delete doesn't reduce the size of the underlying map
 			// it is good enough since this map contains many entries, and it'll be wastefull to let a new map grow again.
 			delete(t.received, k)
@@ -452,6 +479,8 @@ func (t *Engine) HandleIncomingTssMessage(msg Incoming) {
 	if t.started.Load() != started {
 		return // TODO: Consider what to do.
 	}
+
+	receivedMsgCntr.Inc()
 
 	if err := t.handleIncomingTssMessage(msg); err != nil {
 		logErr(t.logger, err)
@@ -553,7 +582,9 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 		return shouldEcho, nil
 	}
 
-	if err := t.updateFp(parsed); err != nil {
+	deliveredMsgCntr.Inc() // only in Echo case.
+
+	if err := t.feedIncomingToFp(parsed); err != nil {
 		return shouldEcho, logableError{
 			fmt.Errorf("failed to update the full party: %w", err),
 			parsed.WireMsg().GetTrackingID(),
@@ -564,12 +595,11 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	return shouldEcho, nil
 }
 
-func (t *Engine) updateFp(parsed tss.ParsedMessage) error {
+func (t *Engine) feedIncomingToFp(parsed tss.ParsedMessage) error {
 	trackId := parsed.WireMsg().TrackingID
 	from := parsed.GetFrom()
 	maxLiveSignatures := t.GuardianStorage.MaxSimultaneousSignatures
 
-	// TODO: traackID?
 	if ok := t.sigCounter.add(trackId, from, maxLiveSignatures); ok {
 		return t.fp.Update(parsed)
 	}
@@ -625,7 +655,7 @@ func (t *Engine) handleUnicast(m Incoming) error {
 		}
 	}
 
-	if err := t.updateFp(parsed); err != nil {
+	if err := t.feedIncomingToFp(parsed); err != nil {
 		return logableError{
 			fmt.Errorf("unicast failed to update the full party: %w", err),
 			parsed.WireMsg().GetTrackingID(),
