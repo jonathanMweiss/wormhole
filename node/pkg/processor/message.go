@@ -50,7 +50,7 @@ func (p *Processor) handleMessage(k *common.MessagePublication) {
 
 	v := &VAA{
 		VAA: vaa.VAA{
-			Version:          vaa.VaaVersion1,
+			Version:          vaa.MultiSigVaaVersion,
 			GuardianSetIndex: p.gs.Index,
 			Signatures:       nil,
 			Timestamp:        k.Timestamp,

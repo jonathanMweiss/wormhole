@@ -212,7 +212,7 @@ func (pd *ProcessorData) createObservation(b *testing.B, guardianIdx int, k *com
 	b.Helper()
 	v := &VAA{
 		VAA: vaa.VAA{
-			Version:          vaa.VaaVersion1,
+			Version:          vaa.MultiSigVaaVersion,
 			GuardianSetIndex: uint32(guardianIdx),
 			Signatures:       nil,
 			Timestamp:        k.Timestamp,
