@@ -85,7 +85,7 @@ func (c *activeSigCounter) remove(d []byte) {
 	guardians := c.digestToGuardians[strDigest(d)]
 	delete(c.digestToGuardians, strDigest(d))
 
-	for g, _ := range guardians {
+	for g := range guardians {
 		delete(c.guardianToDigests[g], strDigest(d))
 	}
 }
