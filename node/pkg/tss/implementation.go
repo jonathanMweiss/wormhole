@@ -397,6 +397,8 @@ func (t *Engine) handleFpError(err *tss.Error) {
 func (t *Engine) handleFpOutput(m tss.Message) {
 	tssMsg, err := t.intoSendable(m)
 	if err == nil {
+		sentMsgCntr.Inc()
+
 		select {
 		case t.messageOutChan <- tssMsg:
 		case <-t.ctx.Done():
