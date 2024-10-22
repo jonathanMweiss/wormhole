@@ -714,7 +714,11 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 	defer t.mtx.Unlock()
 
 	if stored, ok := t.received[id]; ok {
-		if stored.messageDigest != msgDigest {
+		if stored.messageDigest == nil {
+			return fmt.Errorf("stored message digest is nil") // shouldn't happen.
+		}
+
+		if *stored.messageDigest != msgDigest {
 			return ErrEquivicatingGuardian
 		}
 
@@ -723,7 +727,7 @@ func (t *Engine) validateUnicastDoesntExist(parsed tss.ParsedMessage) error {
 
 	t.received[id] = &broadcaststate{
 		timeReceived:  time.Now(), // used for GC.
-		messageDigest: hash(bts),  // used to ensure no equivocation.
+		messageDigest: &msgDigest, // used to ensure no equivocation.
 		votes:         nil,        // no votes should be stored for a unicast.
 		echoedAlready: true,       // ensuring this never echoed since it is a unicast.
 		mtx:           nil,        // no need to lock this, just store it.
