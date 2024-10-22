@@ -105,7 +105,7 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
 	// No need to check input: it was already checked before reaching this point
 
-	signed := msg.toEcho().Message
+	signed := msg.toEcho().Echoed.(*tsscommv1.Echo_Message).Message
 	echoer := msg.GetSource()
 
 	state, err := t.fetchState(parsed, signed)

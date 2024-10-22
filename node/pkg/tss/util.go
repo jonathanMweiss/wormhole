@@ -165,7 +165,7 @@ var (
 	ErrNilPartyId            = fmt.Errorf("party id is nil")
 	ErrEmptyIDInPID          = fmt.Errorf("partyId identifier is empty")
 	ErrEmptyKeyInPID         = fmt.Errorf("partyId doesn't contain a key")
-	ErrSignedMessageIsNil    = fmt.Errorf("SignedMessage is nil")
+	ErrEchoedContentIsNil    = fmt.Errorf("echo content is nil")
 	ErrNoContent             = fmt.Errorf("SignedMessage doesn't contain a content")
 	ErrNilPayload            = fmt.Errorf("SignedMessage doesn't contain a payload")
 )
@@ -175,9 +175,43 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return ErrEchoIsNil
 	}
 
-	m := e.Message
+	if e.Echoed == nil {
+		return ErrEchoedContentIsNil
+	}
+
+	switch m := e.Echoed.(type) {
+	case *tsscommv1.Echo_Message:
+		return validateSignedMessageCorrectForm(m.Message)
+	case *tsscommv1.Echo_Hashed:
+		return validateHashedCorrectForm(m.Hashed)
+	default:
+		return fmt.Errorf("neither Echo_Message nor a Echo_Hashed message in Echo content")
+	}
+}
+
+func validateHashedCorrectForm(s *tsscommv1.HashedMessage) error {
+	if s == nil {
+		return ErrEchoedContentIsNil
+	}
+
+	if err := validatePartIdProtoCorrectForm(s.Origin); err != nil {
+		return fmt.Errorf("seen sender pID error:%w", err)
+	}
+
+	if len(s.Uuid) != len(uuid{}) {
+		return fmt.Errorf("seen UUID not in correct form")
+	}
+
+	if len(s.Digest) != len(digest{}) {
+		return fmt.Errorf("seen Digest not in correct form")
+	}
+
+	return nil
+}
+
+func validateSignedMessageCorrectForm(m *tsscommv1.SignedMessage) error {
 	if m == nil {
-		return ErrSignedMessageIsNil
+		return ErrEchoedContentIsNil
 	}
 
 	if err := validatePartIdProtoCorrectForm(m.Sender); err != nil {

@@ -84,8 +84,32 @@ func (i *IncomingMessage) GetSource() *tsscommv1.PartyId {
 	return i.Source
 }
 
-func newEcho(msg *tsscommv1.SignedMessage, recipients []*tsscommv1.PartyId) *Echo {
-	return &Echo{Echo: &tsscommv1.Echo{Message: msg}, Recipients: recipients}
+func newEcho(msg any, recipients []*tsscommv1.PartyId) *Echo {
+	if msg == nil {
+		return nil
+	}
+
+	var res *Echo
+
+	switch v := msg.(type) {
+	case *tsscommv1.Echo:
+		res = &Echo{Echo: msg.(*tsscommv1.Echo)}
+	case *tsscommv1.Echo_Message:
+		res = &Echo{Echo: &tsscommv1.Echo{Echoed: &tsscommv1.Echo_Message{Message: v.Message}}}
+	case *tsscommv1.Echo_Hashed:
+		res = &Echo{Echo: &tsscommv1.Echo{Echoed: &tsscommv1.Echo_Hashed{Hashed: v.Hashed}}}
+	case *tsscommv1.SignedMessage:
+		res = &Echo{Echo: &tsscommv1.Echo{Echoed: &tsscommv1.Echo_Message{Message: v}}}
+	case *tsscommv1.HashedMessage:
+		res = &Echo{Echo: &tsscommv1.Echo{Echoed: &tsscommv1.Echo_Hashed{Hashed: v}}}
+	default:
+		return nil
+	}
+
+	res.Recipients = recipients
+
+	return res
+
 }
 
 // GetDestinations implements Sendable.

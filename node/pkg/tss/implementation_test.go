@@ -42,13 +42,13 @@ func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *
 	a.NoError(err)
 
 	msg := &tsscommv1.Echo{
-		Message: &tsscommv1.SignedMessage{
+		Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 			Content:   &tsscommv1.TssContent{Payload: payload},
 			Sender:    partyIdToProto(t.Self),
 			Signature: nil,
-		},
+		}},
 	}
-	a.NoError(t.sign(msg.Message))
+	a.NoError(t.sign(msg.Echoed.(*tsscommv1.Echo_Message).Message))
 
 	return &IncomingMessage{
 		Source: partyIdToProto(t.Self),
@@ -247,7 +247,7 @@ func TestEquivocation(t *testing.T) {
 			a.False(shouldDeliver)
 
 			equvicatingEchoerMessage := parsedIntoEcho(a, e2, parsed1)
-			equvicatingEchoerMessage.Content.GetEcho().Message.Content.Payload[0] += 1
+			equvicatingEchoerMessage.Content.GetEcho().Echoed.(*tsscommv1.Echo_Message).Message.Content.Payload[0] += 1
 			// now echoer is equivicating (change content, but of some seen message):
 			_, _, err = e1.relbroadcastInspection(parsed1, equvicatingEchoerMessage)
 			a.ErrorContains(err, e2.Self.Id)
@@ -312,7 +312,7 @@ func TestBadInputs(t *testing.T) {
 
 			echo.setSource(e2.Self)
 
-			echo.toEcho().Message.Signature[0] += 1
+			echo.toEcho().Echoed.(*tsscommv1.Echo_Message).Message.Signature[0] += 1
 			_, _, err := e1.relbroadcastInspection(parsed1, echo)
 			a.ErrorIs(err, ErrInvalidSignature)
 
@@ -363,13 +363,13 @@ func TestBadInputs(t *testing.T) {
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{}},
 			},
 		})
-		a.ErrorIs(err, ErrSignedMessageIsNil)
+		a.ErrorIs(err, ErrEchoedContentIsNil)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{
 			Source: partyIdToProto(e2.Self),
 			Content: &tsscommv1.PropagatedMessage{
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-					Message: &tsscommv1.SignedMessage{},
+					Echoed: &tsscommv1.Echo_Message{&tsscommv1.SignedMessage{}},
 				}}},
 		})
 		a.ErrorIs(err, ErrNilPartyId)
@@ -378,9 +378,9 @@ func TestBadInputs(t *testing.T) {
 			Source: partyIdToProto(e2.Self),
 			Content: &tsscommv1.PropagatedMessage{
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-					Message: &tsscommv1.SignedMessage{
+					Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 						Sender: &tsscommv1.PartyId{},
-					},
+					}},
 				}}},
 		})
 		a.ErrorIs(err, ErrEmptyIDInPID)
@@ -389,42 +389,44 @@ func TestBadInputs(t *testing.T) {
 			Source: partyIdToProto(e2.Self),
 			Content: &tsscommv1.PropagatedMessage{
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-					Message: &tsscommv1.SignedMessage{
+					Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 						Sender: &tsscommv1.PartyId{
 							Id:  "a",
 							Key: []byte{},
 						},
-					},
+					}},
 				}}},
 		})
 		a.ErrorIs(err, ErrEmptyKeyInPID)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
+				Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 					Sender: partyIdToProto(e2.Self),
-				},
+				}},
 			}}},
 		})
 		a.ErrorIs(err, ErrNoContent)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
+				Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 					Content: &tsscommv1.TssContent{},
 					Sender:  partyIdToProto(e2.Self),
-				},
+				}},
 			}}},
 		})
 		a.ErrorIs(err, ErrNilPayload)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
-					Content: &tsscommv1.TssContent{
-						Payload: []byte{1, 2, 3},
+				Echoed: &tsscommv1.Echo_Message{
+					Message: &tsscommv1.SignedMessage{
+						Content: &tsscommv1.TssContent{
+							Payload: []byte{1, 2, 3},
+						},
+						Sender: partyIdToProto(e2.Self),
 					},
-					Sender: partyIdToProto(e2.Self),
 				},
 			}}},
 		})
@@ -432,12 +434,14 @@ func TestBadInputs(t *testing.T) {
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
-					Content: &tsscommv1.TssContent{
-						Payload: []byte{1, 2, 3},
+				Echoed: &tsscommv1.Echo_Message{
+					Message: &tsscommv1.SignedMessage{
+						Content: &tsscommv1.TssContent{
+							Payload: []byte{1, 2, 3},
+						},
+						Sender:    partyIdToProto(e2.Self),
+						Signature: []byte{1, 2, 3},
 					},
-					Sender:    partyIdToProto(e2.Self),
-					Signature: []byte{1, 2, 3},
 				},
 			}}},
 		})
@@ -618,15 +622,17 @@ func TestMessagesWithBadRounds(t *testing.T) {
 				Source: partyIdToProto(from),
 				Content: &tsscommv1.PropagatedMessage{Message: &tsscommv1.PropagatedMessage_Echo{
 					Echo: &tsscommv1.Echo{
-						Message: &tsscommv1.SignedMessage{
-							Content:   &tsscommv1.TssContent{Payload: bts},
-							Sender:    partyIdToProto(from),
-							Signature: nil,
+						Echoed: &tsscommv1.Echo_Message{
+							Message: &tsscommv1.SignedMessage{
+								Content:   &tsscommv1.TssContent{Payload: bts},
+								Sender:    partyIdToProto(from),
+								Signature: nil,
+							},
 						},
 					},
 				}},
 			}
-			a.NoError(e1.sign(m.Content.GetEcho().Message))
+			a.NoError(e1.sign(m.Content.GetEcho().Echoed.(*tsscommv1.Echo_Message).Message))
 
 			_, err = e2.handleEcho(m)
 			a.ErrorIs(err, errBadRoundsInEcho)

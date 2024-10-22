@@ -26,6 +26,15 @@ message TssContent{
   uint64 msg_serial_number = 2;
 }
 
+// HashedMessage is a message that is sent as an echo without the content to save bandwidth.
+// this message should not be sent in Reliable Broadcast protocols, but in a Broadcast channel where one wants to 
+// learn that everyone saw the same message from the original sender.
+message HashedMessage {
+   bytes uuid=1;
+   bytes digest=2;
+   PartyId origin = 3; // TODO: Consider if needed. 
+}
+
 // SignedMessage is the content of a broadcast message. It may be echoed and as a result requires a signature.
 message SignedMessage {
   TssContent content = 1;
@@ -36,11 +45,16 @@ message SignedMessage {
 
 // Echo is a message explicitly used by the Reliable Broadcast protocol.
 message Echo {
-  SignedMessage message = 1;
+  oneof echoed {
+    SignedMessage message = 1;
+    HashedMessage hashed = 2;
+  }
 }
+
 message Unicast{
   TssContent content = 1;
 }
+
 // PropagatedMessage is a message that is sent across the network,
 // either to a specific recipient or all nodes (using reliable broadcast).
 message PropagatedMessage {

@@ -57,10 +57,19 @@ type Engine struct {
 
 type PEM []byte
 
+type Configurations struct {
+	// MaxSignerTTL is the maximum time a signer is allowed to be active.
+	// used to release resources.
+	MaxSignerTTL time.Duration
+
+	UseReliableBroadcast bool // if set to true, the engine will use reliable broadcast protocol instead of hash broadcast.
+}
+
 // GuardianStorage is a struct that holds the data needed for a guardian to participate in the TSS protocol
 // including its signing key, and the shared symmetric keys with other guardians.
 // should be loaded from a file.
 type GuardianStorage struct {
+	Configurations
 	Self *tss.PartyID
 
 	// should be a certificate generated with SecretKey
@@ -83,10 +92,6 @@ type GuardianStorage struct {
 	SavedSecretParameters *keygen.LocalPartySaveData
 
 	LoadDistributionKey []byte
-
-	// MaxSignerTTL is the maximum time a signer is allowed to be active.
-	// used to release resources.
-	MaxSignerTTL time.Duration
 
 	// data structures to ensure quick lookups:
 	guardiansProtoIDs []*tsscommv1.PartyId
@@ -540,7 +545,7 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 	select {
 	case <-t.ctx.Done():
 		return t.ctx.Err()
-	case t.messageOutChan <- newEcho(content.Message, t.guardiansProtoIDs):
+	case t.messageOutChan <- newEcho(content.Echoed, t.guardiansProtoIDs):
 	}
 
 	return nil
@@ -549,7 +554,7 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 var errBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
 
 func (t *Engine) handleEcho(m Incoming) (bool, error) {
-	parsed, err := t.parseEcho(m)
+	content, err := t.parseEcho(m)
 	if err != nil {
 		return false,
 			logableError{
@@ -559,9 +564,19 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 			}
 	}
 
+	if !content.isParsedMessage {
+		// TODO: handle hashedBroadcast content.
+		// false because we never echo a hashed message values (only if given from original sender)
+		panic("not implemented")
+	}
+
+	return t.handleEchoWithContent(m, content.ParsedMessage)
+}
+
+func (t *Engine) handleEchoWithContent(m Incoming, parsed tss.ParsedMessage) (shouldEcho bool, err error) {
 	rnd, err := getRound(parsed)
 	if err != nil {
-		return false,
+		return shouldEcho,
 			logableError{
 				fmt.Errorf("couldn't extract round from echo: %w", err),
 				parsed.WireMsg().GetTrackingID(),
@@ -570,8 +585,9 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	}
 
 	// according to gg18 (tss ecdsa paper), unicasts are sent in these rounds.
+	// only in Echo case.
 	if rnd == round1Message1 || rnd == round2Message {
-		return false,
+		return shouldEcho,
 			logableError{
 				errBadRoundsInEcho,
 				parsed.WireMsg().GetTrackingID(),
@@ -581,7 +597,7 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 
 	shouldEcho, shouldDeliver, err := t.relbroadcastInspection(parsed, m)
 	if err != nil {
-		return false,
+		return shouldEcho,
 			logableError{
 				fmt.Errorf("reliable broadcast inspection issue: %w", err),
 				parsed.WireMsg().GetTrackingID(),
@@ -593,7 +609,7 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 		return shouldEcho, nil
 	}
 
-	deliveredMsgCntr.Inc() // only in Echo case.
+	deliveredMsgCntr.Inc()
 
 	if err := t.feedIncomingToFp(parsed); err != nil {
 		return shouldEcho, logableError{
@@ -721,18 +737,46 @@ var (
 	ErrUnkownSender = fmt.Errorf("sender is not a known guardian")
 )
 
-func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
+type echoContent struct {
+	isParsedMessage bool
+	tss.ParsedMessage
+	*tsscommv1.HashedMessage
+}
+
+func (t *Engine) parseEcho(m Incoming) (*echoContent, error) {
 	echoMsg := m.toEcho()
 	if err := vaidateEchoCorrectForm(echoMsg); err != nil {
 		return nil, err
 	}
 
-	senderPid := protoToPartyId(echoMsg.Message.Sender)
+	var senderId *tsscommv1.PartyId
+	isHashedMsg := false
+	switch v := echoMsg.Echoed.(type) {
+	case *tsscommv1.Echo_Message:
+		senderId = v.Message.Sender
+
+	case *tsscommv1.Echo_Hashed:
+		senderId = v.Hashed.Origin
+		isHashedMsg = true
+	}
+
+	senderPid := protoToPartyId(senderId)
 	if !t.GuardianStorage.contains(senderPid) {
 		return nil, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
 	}
 
-	return tss.ParseWireMessage(echoMsg.Message.Content.Payload, senderPid, true)
+	if isHashedMsg {
+		return &echoContent{false, nil, echoMsg.Echoed.(*tsscommv1.Echo_Hashed).Hashed}, nil
+	}
+
+	v := echoMsg.Echoed.(*tsscommv1.Echo_Message)
+
+	prsd, err := tss.ParseWireMessage(v.Message.Content.Payload, senderPid, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return &echoContent{true, prsd, nil}, nil
 }
 
 // SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.
