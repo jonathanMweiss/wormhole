@@ -71,7 +71,7 @@ var ErrEquivicatingGuardian = fmt.Errorf("equivication, guardian sent two differ
 
 func (t *Engine) updateStateFromSigned(s *broadcaststate, msg *tsscommv1.SignedMessage, echoer *tsscommv1.PartyId) (shouldEcho bool, err error) {
 	if !s.isSet() {
-		return false, fmt.Errorf("state is not set, can't update") // shouldn't reach this point.
+		return false, fmt.Errorf("state is not set, can't updateFromSigned") // shouldn't reach this point.
 	}
 	// this is a SECURITY measure to prevent equivication attacks:
 	// It is possible that the same guardian sends two different messages for the same round and session.
@@ -88,10 +88,10 @@ func (t *Engine) updateStateFromSigned(s *broadcaststate, msg *tsscommv1.SignedM
 
 	f := t.GuardianStorage.getMaxExpectedFaults()
 
-	return s.update(echoer, msg, f)
+	return s.updateFromSigned(echoer, msg, f)
 }
 
-func (s *broadcaststate) update(echoer *tsscommv1.PartyId, msg *tsscommv1.SignedMessage, f int) (shouldEcho bool, err error) {
+func (s *broadcaststate) updateFromSigned(echoer *tsscommv1.PartyId, msg *tsscommv1.SignedMessage, f int) (shouldEcho bool, err error) {
 	isMsgSrc := equalPartyIds(protoToPartyId(echoer), protoToPartyId(msg.Sender))
 
 	s.mtx.Lock()
@@ -129,9 +129,9 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 // broadcastInspection is responsible for either reliable-broadcast logic (Bracha's algorithm),
 // or hashed-broadcast channel logic (similar but less robust - without message duplications).
 // Not allowed to authorise echoing.
-func (t *Engine) broadcastInspection(msg Incoming) (shouldDeliver bool, err error) {
+func (t *Engine) broadcastInspection(msg Incoming) (toDeliver tss.ParsedMessage, err error) {
 	if t.UseReliableBroadcast {
-		return false, fmt.Errorf("received hashed message, but reliable broadcast is enabled")
+		return toDeliver, fmt.Errorf("received hashed message, but reliable broadcast is enabled")
 	}
 
 	hashed := msg.toEcho().Echoed.(*tsscommv1.Echo_Hashed).Hashed
@@ -142,23 +142,27 @@ func (t *Engine) broadcastInspection(msg Incoming) (shouldDeliver bool, err erro
 
 	state, err := t.fetchOrCreateState(uid, echoer, hashed, nil)
 	if err != nil {
-		return false, err
+		return toDeliver, err
 	}
 
-	if err := state.updateFromHashed(hashed, echoer); err != nil {
-		return false, err
-	}
+	state.updateFromHashed(hashed, echoer)
 
 	if t.shouldDeliver(state) {
-		return true, nil
+		toDeliver = state.tssMessage
 	}
 
-	return false, nil
+	return toDeliver, err
 }
 
-func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) error {
+func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
 
-	panic("not implemented")
+	votingFor := digest{}
+
+	copy(votingFor[:], hashed.Digest)
+
+	s.votes[voterId(echoer.Id)] = votingFor
 }
 
 func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
