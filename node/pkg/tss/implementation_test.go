@@ -70,7 +70,7 @@ func TestBroadcast(t *testing.T) {
 	t.Run("forLeaderCreatingMessage", func(t *testing.T) {
 		a := assert.New(t)
 		// f = 1, n = 5
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		e1 := engines[0]
 		// make parsedMessage, and insert into e1
@@ -89,7 +89,7 @@ func TestBroadcast(t *testing.T) {
 
 	t.Run("forEnoughEchos", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 
 		// two different signers on an echo, meaning it will receive from two players.
@@ -115,12 +115,13 @@ func TestBroadcast(t *testing.T) {
 	})
 }
 
-func load5GuardiansSetupForBroadcastChecks(a *assert.Assertions) []*Engine {
+func load5GuardiansSetupForrelBroadcastChecks(a *assert.Assertions) []*Engine {
 	engines, err := _loadGuardians(5) // f=1, n=5.
 	a.NoError(err)
 
 	for _, v := range engines {
 		v.GuardianStorage.Threshold = 2 // meaning 3 guardians are needed to sign.
+		v.GuardianStorage.UseReliableBroadcast = true
 	}
 
 	return engines
@@ -129,7 +130,7 @@ func load5GuardiansSetupForBroadcastChecks(a *assert.Assertions) []*Engine {
 func TestDeliver(t *testing.T) {
 	t.Run("After2fPlus1Messages", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 
 		// two different signers on an echo, meaning it will receive from two players.
@@ -163,7 +164,7 @@ func TestDeliver(t *testing.T) {
 
 	t.Run("doesn'tDeliverTwice", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2, e3, e4 := engines[0], engines[1], engines[2], engines[3]
 
 		// two different signers on an echo, meaning it will receive from two players.
@@ -204,7 +205,7 @@ func TestDeliver(t *testing.T) {
 
 func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 	for i, rnd := range allRounds {
 		trackingId := party.Digest{byte(i)}
@@ -225,7 +226,7 @@ func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
 func TestEquivocation(t *testing.T) {
 	t.Run("inBroadcastLogic", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2 := engines[0], engines[1]
 
 		for i, rndType := range allRounds {
@@ -256,7 +257,7 @@ func TestEquivocation(t *testing.T) {
 
 	t.Run("inUnicast", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2 := engines[0], engines[1]
 
 		for i, rndType := range unicastRounds {
@@ -297,7 +298,7 @@ func TestEquivocation(t *testing.T) {
 
 func TestBadInputs(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1, e2 := engines[0], engines[1]
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
@@ -450,7 +451,7 @@ func TestBadInputs(t *testing.T) {
 
 	t.Run("Begin signing", func(t *testing.T) {
 		var tmp *Engine = nil
-		engines2 := load5GuardiansSetupForBroadcastChecks(a)
+		engines2 := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		a.ErrorIs(tmp.BeginAsyncThresholdSigningProtocol(nil), errNilTssEngine)
 		a.ErrorIs(e2.BeginAsyncThresholdSigningProtocol(nil), errTssEngineNotStarted)
@@ -474,7 +475,7 @@ func TestBadInputs(t *testing.T) {
 
 func TestFetchPartyId(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 	pid, err := e1.FetchPartyId(e1.guardiansCerts[0])
 	a.NoError(err)
@@ -491,7 +492,7 @@ func TestFetchPartyId(t *testing.T) {
 
 func TestCleanup(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 
 	e1.received[uuid{1}] = &broadcaststate{
@@ -533,7 +534,7 @@ func TestRouteCheck(t *testing.T) {
 	// this test is a bit of a hack.
 	// To ensure we don't panic on bad inputs.
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
@@ -586,7 +587,7 @@ func TestE2E(t *testing.T) {
 
 func TestMessagesWithBadRounds(t *testing.T) {
 	a := assert.New(t)
-	gs := load5GuardiansSetupForBroadcastChecks(a)
+	gs := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1, e2 := gs[0], gs[1]
 	from := e1.Self
 	to := e2.Self
@@ -845,7 +846,7 @@ func TestSigCounter(t *testing.T) {
 	ctx = testutils.MakeSupervisorContext(ctx)
 
 	t.Run("MaxCountBlockAdditionalUpdates", func(t *testing.T) {
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1 := engines[0]
 
 		e1.MaxSimultaneousSignatures = 1
@@ -873,7 +874,7 @@ func TestSigCounter(t *testing.T) {
 	})
 
 	t.Run("ErrorReduceCount", func(t *testing.T) {
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1 := engines[0]
 
 		e1.MaxSimultaneousSignatures = 1
@@ -903,7 +904,7 @@ func TestSigCounter(t *testing.T) {
 	})
 
 	t.Run("sigDoneReduceCount", func(t *testing.T) {
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1 := engines[0]
 
 		e1.MaxSimultaneousSignatures = 1
@@ -939,7 +940,7 @@ func TestSigCounter(t *testing.T) {
 	})
 
 	t.Run("CanHaveSimulSigners", func(t *testing.T) {
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1 := engines[0]
 		e1.MaxSimultaneousSignatures = 2
 

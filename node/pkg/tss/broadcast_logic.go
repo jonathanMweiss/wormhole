@@ -20,6 +20,8 @@ type broadcaststate struct {
 	messageDigest *digest
 	trackingId    []byte
 
+	tssMessage tss.ParsedMessage
+
 	// voters mapping between voter and the messageDigest they voted for (claimed as seen).
 	votes map[voterId]digest
 
@@ -67,15 +69,17 @@ func (t *Engine) shouldDeliver(s *broadcaststate) bool {
 
 var ErrEquivicatingGuardian = fmt.Errorf("equivication, guardian sent two different messages for the same round and session")
 
-func (t *Engine) updateState(s *broadcaststate, msg *tsscommv1.SignedMessage, echoer *tsscommv1.PartyId) (shouldEcho bool, err error) {
-	if s.messageDigest == nil {
-		return false, fmt.Errorf("state doesn't have a message digest")
+func (t *Engine) updateStateFromSigned(s *broadcaststate, msg *tsscommv1.SignedMessage, echoer *tsscommv1.PartyId) (shouldEcho bool, err error) {
+	if !s.isSet() {
+		return false, fmt.Errorf("state is not set, can't update") // shouldn't reach this point.
 	}
 	// this is a SECURITY measure to prevent equivication attacks:
 	// It is possible that the same guardian sends two different messages for the same round and session.
 	// We do not accept messages with the same uuid and different content.
 	if *s.messageDigest != hashSignedMessage(msg) {
-		if err := t.verifySignedMessage(msg); err == nil { // no error means the sender is the equivicator.
+
+		if err := t.verifySignedMessage(msg); err == nil {
+			// no error means the sender is the equivicator.
 			return false, fmt.Errorf("%w:%v", ErrEquivicatingGuardian, msg.Sender)
 		}
 
@@ -136,7 +140,7 @@ func (t *Engine) broadcastInspection(msg Incoming) (shouldDeliver bool, err erro
 	uid := uuid{}
 	copy(uid[:], hashed.Uuid)
 
-	state, err := t.fetchOrCreateState(uid, nil, hashed)
+	state, err := t.fetchOrCreateState(uid, echoer, hashed, nil)
 	if err != nil {
 		return false, err
 	}
@@ -153,6 +157,7 @@ func (t *Engine) broadcastInspection(msg Incoming) (shouldDeliver bool, err erro
 }
 
 func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) error {
+
 	panic("not implemented")
 }
 
@@ -171,7 +176,7 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 		return false, false, fmt.Errorf("tracking id is nil")
 	}
 
-	state, err := t.fetchOrCreateState(uuid, parsed.WireMsg().TrackingID, signed)
+	state, err := t.fetchOrCreateState(uuid, echoer, signed, parsed)
 	if err != nil {
 		return false, false, err
 	}
@@ -179,7 +184,7 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 	// If we weren't using TLS - at this point we would have to verify the
 	// signature of the echoer (sender).
 
-	allowedToBroadcast, err := t.updateState(state, signed, echoer)
+	allowedToBroadcast, err := t.updateStateFromSigned(state, signed, echoer)
 	if err != nil {
 		return false, false, err
 	}
@@ -191,14 +196,52 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 	return allowedToBroadcast, false, nil
 }
 
-func (t *Engine) fetchOrCreateState(uuid uuid, trackingId []byte, echoedContent any) (*broadcaststate, error) {
+func (t *Engine) fetchOrCreateState(uuid uuid, echoer *tsscommv1.PartyId, echoedContent any, parsed tss.ParsedMessage) (*broadcaststate, error) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
-	signed := echoedContent.(*tsscommv1.SignedMessage)
-	// depends on the echoedContent
-	state, ok := t.received[uuid]
-	if ok {
+	state, exists := t.received[uuid]
+	if !exists {
+		state = &broadcaststate{
+			timeReceived:  time.Now(),
+			messageDigest: nil,
+
+			trackingId: nil,
+			tssMessage: nil,
+
+			votes:            make(map[voterId]digest),
+			echoedAlready:    false,
+			alreadyDelivered: false,
+			mtx:              &sync.Mutex{},
+		}
+
+		t.received[uuid] = state
+	}
+
+	if _, ok := echoedContent.(*tsscommv1.HashedMessage); ok { // no more fields to add since hashed message. (no content or sig)
+		return state, nil
+	}
+
+	// reaching this point means the message is not a hashed,
+	// then it should be called with parsed + signed message.
+	if parsed == nil {
+		return nil, fmt.Errorf("parsed message is nil")
+	}
+
+	signed, ok := echoedContent.(*tsscommv1.SignedMessage)
+	if !ok {
+		return nil, fmt.Errorf("echoed content is not a signed message") // shouldn't happen, but just in case.
+	}
+
+	hashed := hashSignedMessage(signed)
+
+	if state.isSet() {
+		// if the state is set, then it already saw a signature and accepted it.
+		// so this might be equivication, check if accepted different message:
+		if hashed != *state.messageDigest {
+			return nil, fmt.Errorf("%w:%v", ErrEquivicatingGuardian, echoer)
+		}
+
 		return state, nil
 	}
 
@@ -206,20 +249,14 @@ func (t *Engine) fetchOrCreateState(uuid uuid, trackingId []byte, echoedContent 
 		return nil, err
 	}
 
-	hshd := hashSignedMessage(signed)
-	state = &broadcaststate{
-		timeReceived:  time.Now(),
-		messageDigest: &hshd,
-
-		trackingId: trackingId,
-
-		votes:            make(map[voterId]digest),
-		echoedAlready:    false,
-		alreadyDelivered: false,
-		mtx:              &sync.Mutex{},
-	}
-
-	t.received[uuid] = state
+	// setting the state to the message.
+	state.tssMessage = parsed
+	state.messageDigest = &hashed
+	state.trackingId = parsed.WireMsg().TrackingID
 
 	return state, nil
+}
+
+func (s *broadcaststate) isSet() bool {
+	return s.tssMessage != nil && s.messageDigest != nil && s.trackingId != nil
 }
