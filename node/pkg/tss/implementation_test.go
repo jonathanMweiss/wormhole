@@ -37,6 +37,30 @@ var (
 	allRounds = append(unicastRounds, broadcastRounds...)
 )
 
+func parsedIntoHashEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *IncomingMessage {
+
+	m := parsedIntoEcho(a, t, parsed)
+	dgst := hashSignedMessage(m.toEcho().Echoed.(*tsscommv1.Echo_Message).Message)
+
+	uid, err := t.getMessageUUID(parsed)
+	a.NoError(err)
+	return &IncomingMessage{
+		Source: partyIdToProto(t.Self),
+		Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{
+				Echo: &tsscommv1.Echo{
+					Echoed: &tsscommv1.Echo_Hashed{
+						Hashed: &tsscommv1.HashedMessage{
+							Uuid:   uid[:],
+							Digest: dgst[:],
+							Origin: partyIdToProto(t.Self),
+						},
+					},
+				},
+			},
+		},
+	}
+}
 func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *IncomingMessage {
 	payload, _, err := parsed.WireBytes()
 	a.NoError(err)
@@ -64,7 +88,76 @@ func (i *IncomingMessage) setSource(id *tss.PartyID) {
 	i.Source = partyIdToProto(id)
 }
 
-func TestBroadcast(t *testing.T) {
+func TestHashBroadcast(t *testing.T) {
+	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign (f<=1).
+	t.Run("NotDeliverWithoutContent", func(t *testing.T) {
+		a := assert.New(t)
+		// f = 1, n = 5
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+
+		e1 := engines[0]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+			for _, e := range engines {
+				incomingHashedEcho.setSource(e.Self)
+
+				toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+				a.NoError(err)
+				a.Nil(toDeliver)
+			}
+
+			uid, err := e1.getMessageUUID(parsed1)
+			a.NoError(err)
+
+			st, ok := e1.received[uid]
+			a.True(ok)
+			a.Len(st.votes, len(engines))
+		}
+	})
+
+	t.Run("NotDeliverWithoutEnoughVotes", func(t *testing.T) {
+		a := assert.New(t)
+		// f = 1, n = 5
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+
+		e1 := engines[0]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// message from leader, so it should echo, but not enough values, so it shouldn't deliver.
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+		}
+	})
+
+	t.Run("EchoWhenMixMode", func(t *testing.T) {
+		// TODO: Consider what we want, mix mode or not. if in mix mode, should hash echoes be counted?
+		// I think Mix mode shouldn't happen at all. So we might need to add a check for that.
+		t.FailNow()
+	})
+
+	t.Run("NoDoubleCount", func(t *testing.T) {
+		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
+		t.FailNow()
+	})
+
+	t.Run("NoDeliverTwice", func(t *testing.T) {
+		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
+		t.FailNow()
+	})
+}
+func TestRelBroadcast(t *testing.T) {
 
 	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign (f<=1).
 	t.Run("forLeaderCreatingMessage", func(t *testing.T) {
