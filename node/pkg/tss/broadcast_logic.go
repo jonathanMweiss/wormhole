@@ -150,7 +150,9 @@ func (t *Engine) hashBroadcastInspection(hashed *tsscommv1.HashedMessage, echoer
 		return toDeliver, err
 	}
 
-	state.updateFromHashed(hashed, echoer)
+	if err := state.updateFromHashed(hashed, echoer); err != nil {
+		return toDeliver, err
+	}
 
 	if t.shouldDeliver(state) {
 		toDeliver = state.tssMessage
@@ -159,15 +161,21 @@ func (t *Engine) hashBroadcastInspection(hashed *tsscommv1.HashedMessage, echoer
 	return toDeliver, err
 }
 
-func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) {
+func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	votingFor := digest{}
+	newVote := digest{}
 
-	copy(votingFor[:], hashed.Digest)
+	copy(newVote[:], hashed.Digest)
 
-	s.votes[voterId(echoer.Id)] = votingFor
+	if oldVote, ok := s.votes[voterId(echoer.Id)]; ok && oldVote != newVote {
+		return fmt.Errorf("%v, changed its vote, from %v to %v", echoer, oldVote, newVote)
+	}
+
+	s.votes[voterId(echoer.Id)] = newVote
+
+	return nil
 }
 
 // relbroadcastInspection is responsible for either reliable-broadcast logic (Bracha's algorithm),

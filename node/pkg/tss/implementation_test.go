@@ -155,9 +155,39 @@ func TestHashBroadcast(t *testing.T) {
 		}
 	})
 
-	t.Run("errorOnChangeVote", func(t *testing.T) {
-		// TODO: for instance someone voted v then vote v2 for the same uuid. this should be an error!
-		// both for hashed and relbroad.
+	t.Run("regRun", func(t *testing.T) {
+		a := assert.New(t)
+		// f = 1, n = 5
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+
+		e1, e2, e3 := engines[0], engines[1], engines[2]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// message from leader, so it should echo, but not enough values, so it shouldn't deliver.
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+
+			// last vote needed:
+			incomingHashedEcho.setSource(e3.Self)
+			toDeliver, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Equal(parsed1, toDeliver)
+		}
+	})
+
+	t.Run("NoChangingVote", func(t *testing.T) {
+		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
 		t.FailNow()
 	})
 
@@ -171,13 +201,19 @@ func TestHashBroadcast(t *testing.T) {
 		t.FailNow()
 	})
 
-	t.Run("EchoWhenMixMode", func(t *testing.T) {
+	t.Run("NotEchoIfNotLeaderInHashedMode", func(t *testing.T) {
 		// TODO: Consider what we want, mix mode or not. if in mix mode, should hash echoes be counted?
 		// I think Mix mode shouldn't happen at all. So we might need to add a check for that.
 		t.FailNow()
 	})
 }
+
 func TestRelBroadcast(t *testing.T) {
+
+	t.Run("NoChangingVote", func(t *testing.T) {
+		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
+		t.FailNow()
+	})
 
 	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign (f<=1).
 	t.Run("forLeaderCreatingMessage", func(t *testing.T) {
