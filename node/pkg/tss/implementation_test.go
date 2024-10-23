@@ -554,8 +554,19 @@ func TestE2E(t *testing.T) {
 	// and reliably broadcasting them.
 
 	a := assert.New(t)
-	engines := loadGuardians(a)
 
+	t.Run("E2E-relbroadcast", func(t *testing.T) {
+		engines := loadGuardians(a, true)
+		e2erun(a, engines)
+	})
+
+	t.Run("E2E-hashbroadcast", func(t *testing.T) {
+		engines := loadGuardians(a, false)
+		e2erun(a, engines)
+	})
+
+}
+func e2erun(a *assert.Assertions, engines []*Engine) {
 	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
@@ -577,10 +588,11 @@ func TestE2E(t *testing.T) {
 		copy(tmp, dgst[:])
 		engine.BeginAsyncThresholdSigningProtocol(tmp)
 	}
+
 	select {
 	case <-dnchn:
 	case <-ctx.Done():
-		t.FailNow()
+		a.FailNow("time-out")
 	}
 }
 
@@ -723,8 +735,8 @@ func _loadGuardians(numParticipants int, isRelbroad bool) ([]*Engine, error) {
 	return engines, nil
 }
 
-func loadGuardians(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(Participants, false)
+func loadGuardians(a *assert.Assertions, isRelBRoadcast bool) []*Engine {
+	engines, err := _loadGuardians(Participants, isRelBRoadcast)
 	a.NoError(err)
 
 	return engines
