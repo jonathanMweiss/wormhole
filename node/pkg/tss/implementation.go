@@ -524,22 +524,35 @@ func (t *Engine) handleIncomingTssMessage(msg Incoming) error {
 		return errNeitherBroadcastNorUnicast
 	}
 
-	shouldEcho, err := t.handleEcho(msg)
-	if err != nil {
-		return err
-	}
-
-	if !shouldEcho {
-		return nil // not an error, just don't echo.
-	}
-
-	return t.sendEchoOut(msg)
+	return t.handleEcho(msg)
 }
 
-func (t *Engine) sendEchoOut(m Incoming) error {
+func (t *Engine) sendEchoOut(m Incoming, parsed tss.ParsedMessage) error {
 	content, ok := proto.Clone(m.toEcho()).(*tsscommv1.Echo)
 	if !ok {
 		return fmt.Errorf("failed to clone echo message")
+	}
+
+	signed, ok := content.Echoed.(*tsscommv1.Echo_Message)
+	if !ok {
+		return fmt.Errorf("should've rerceived a signed message to echo. can't clone and echo hashed message")
+	}
+
+	// if this is not in reliable-broadcast mode, we only send the hash, not the full message.
+	if !t.GuardianStorage.UseReliableBroadcast {
+		uid, err := t.getMessageUUID(parsed)
+		if err != nil {
+			return err
+		}
+
+		hs := hashSignedMessage(signed.Message)
+		hashed := &tsscommv1.HashedMessage{
+			Uuid:   uid[:],
+			Digest: hs[:],
+			Origin: signed.Message.Sender,
+		}
+
+		content.Echoed = &tsscommv1.Echo_Hashed{Hashed: hashed}
 	}
 
 	select {
@@ -553,24 +566,42 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 
 var errBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
 
-func (t *Engine) handleEcho(m Incoming) (bool, error) {
+func (t *Engine) handleEcho(m Incoming) (err error) {
 	content, err := t.parseEcho(m)
 	if err != nil {
-		return false,
-			logableError{
-				fmt.Errorf("couldn't parse echo payload: %w", err),
-				nil,
-				"",
-			}
+		return logableError{
+			fmt.Errorf("couldn't parse echo payload: %w", err),
+			nil,
+			"",
+		}
 	}
 
-	if !content.isParsedMessage {
-		// TODO: handle hashedBroadcast content.
-		// false because we never echo a hashed message values (only if given from original sender)
-		panic("not implemented")
+	if !t.GuardianStorage.UseReliableBroadcast && !content.isParsedMessage {
+		// We never echo a hashed message.
+		toDeliver, err := t.hashBroadcastInspection(content.HashedMessage, m.GetSource())
+		if err != nil {
+			return err
+		}
+
+		if toDeliver == nil {
+			return nil
+		}
+
+		deliveredMsgCntr.Inc()
+
+		return t.feedIncomingToFp(toDeliver)
 	}
 
-	return t.handleEchoWithContent(m, content.ParsedMessage)
+	shouldEcho, err := t.handleEchoWithContent(m, content.ParsedMessage)
+	if err != nil {
+		return err
+	}
+
+	if shouldEcho {
+		t.sendEchoOut(m, content.ParsedMessage)
+	}
+
+	return nil
 }
 
 func (t *Engine) handleEchoWithContent(m Incoming, parsed tss.ParsedMessage) (shouldEcho bool, err error) {

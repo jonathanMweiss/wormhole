@@ -116,12 +116,11 @@ func TestBroadcast(t *testing.T) {
 }
 
 func load5GuardiansSetupForrelBroadcastChecks(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(5) // f=1, n=5.
+	engines, err := _loadGuardians(5, false) // f=1, n=5.
 	a.NoError(err)
 
 	for _, v := range engines {
 		v.GuardianStorage.Threshold = 2 // meaning 3 guardians are needed to sign.
-		v.GuardianStorage.UseReliableBroadcast = true
 	}
 
 	return engines
@@ -635,8 +634,7 @@ func TestMessagesWithBadRounds(t *testing.T) {
 			}
 			a.NoError(e1.sign(m.Content.GetEcho().Echoed.(*tsscommv1.Echo_Message).Message))
 
-			_, err = e2.handleEcho(m)
-			a.ErrorIs(err, errBadRoundsInEcho)
+			a.ErrorIs(e2.handleEcho(m), errBadRoundsInEcho)
 		}
 	})
 }
@@ -705,7 +703,7 @@ func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
 	return st
 }
 
-func _loadGuardians(numParticipants int) ([]*Engine, error) {
+func _loadGuardians(numParticipants int, isRelbroad bool) ([]*Engine, error) {
 	engines := make([]*Engine, numParticipants)
 
 	for i := 0; i < numParticipants; i++ {
@@ -717,6 +715,8 @@ func _loadGuardians(numParticipants int) ([]*Engine, error) {
 		if !ok {
 			return nil, errors.New("not an engine")
 		}
+
+		en.GuardianStorage.UseReliableBroadcast = isRelbroad
 		engines[i] = en
 	}
 
@@ -724,7 +724,7 @@ func _loadGuardians(numParticipants int) ([]*Engine, error) {
 }
 
 func loadGuardians(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(Participants)
+	engines, err := _loadGuardians(Participants, false)
 	a.NoError(err)
 
 	return engines

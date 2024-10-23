@@ -47,7 +47,7 @@ func (t *Engine) shouldDeliver(s *broadcaststate) bool {
 		return false
 	}
 
-	if s.messageDigest == nil {
+	if !s.isSet() {
 		return false
 	}
 
@@ -129,13 +129,10 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 // broadcastInspection is responsible for either reliable-broadcast logic (Bracha's algorithm),
 // or hashed-broadcast channel logic (similar but less robust - without message duplications).
 // Not allowed to authorise echoing.
-func (t *Engine) broadcastInspection(msg Incoming) (toDeliver tss.ParsedMessage, err error) {
+func (t *Engine) hashBroadcastInspection(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) (toDeliver tss.ParsedMessage, err error) {
 	if t.UseReliableBroadcast {
 		return toDeliver, fmt.Errorf("received hashed message, but reliable broadcast is enabled")
 	}
-
-	hashed := msg.toEcho().Echoed.(*tsscommv1.Echo_Hashed).Hashed
-	echoer := msg.GetSource()
 
 	uid := uuid{}
 	copy(uid[:], hashed.Uuid)
@@ -165,9 +162,10 @@ func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoe
 	s.votes[voterId(echoer.Id)] = votingFor
 }
 
+// relbroadcastInspection is responsible for either reliable-broadcast logic (Bracha's algorithm),
+// or for hashed-broadcast channel logic when receiving echo with SignedMessage.
 func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
 	// No need to check input: it was already checked before reaching this point
-
 	signed := msg.toEcho().Echoed.(*tsscommv1.Echo_Message).Message
 	echoer := msg.GetSource()
 
