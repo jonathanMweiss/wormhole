@@ -2,10 +2,10 @@ package tss
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -369,7 +369,7 @@ func TestBadInputs(t *testing.T) {
 			Source: partyIdToProto(e2.Self),
 			Content: &tsscommv1.PropagatedMessage{
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-					Echoed: &tsscommv1.Echo_Message{&tsscommv1.SignedMessage{}},
+					Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{}},
 				}}},
 		})
 		a.ErrorIs(err, ErrNilPartyId)
