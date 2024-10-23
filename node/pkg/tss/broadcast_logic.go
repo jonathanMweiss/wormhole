@@ -73,22 +73,30 @@ func (t *Engine) updateStateFromSigned(s *broadcaststate, msg *tsscommv1.SignedM
 	if !s.isSet() {
 		return false, fmt.Errorf("state is not set, can't updateFromSigned") // shouldn't reach this point.
 	}
+
 	// this is a SECURITY measure to prevent equivication attacks:
 	// It is possible that the same guardian sends two different messages for the same round and session.
 	// We do not accept messages with the same uuid and different content.
-	if *s.messageDigest != hashSignedMessage(msg) {
-
-		if err := t.verifySignedMessage(msg); err == nil {
-			// no error means the sender is the equivicator.
-			return false, fmt.Errorf("%w:%v", ErrEquivicatingGuardian, msg.Sender)
-		}
-
-		return false, fmt.Errorf("%w:%v", ErrEquivicatingGuardian, echoer)
+	if s.isEquivication(msg) {
+		return false, t.findEquivicator(msg, echoer)
 	}
 
 	f := t.GuardianStorage.getMaxExpectedFaults()
 
 	return s.updateFromSigned(echoer, msg, f)
+}
+
+func (s *broadcaststate) isEquivication(msg *tsscommv1.SignedMessage) bool {
+	return *s.messageDigest != hashSignedMessage(msg)
+}
+
+func (t *Engine) findEquivicator(msg *tsscommv1.SignedMessage, echoer *tsscommv1.PartyId) error {
+	// no error means the sender is the equivicator.
+	if err := t.verifySignedMessage(msg); err == nil {
+		return fmt.Errorf("%w:%v", ErrEquivicatingGuardian, msg.Sender)
+	}
+
+	return fmt.Errorf("%w:%v", ErrEquivicatingGuardian, echoer)
 }
 
 func (s *broadcaststate) updateFromSigned(echoer *tsscommv1.PartyId, msg *tsscommv1.SignedMessage, f int) (shouldEcho bool, err error) {
@@ -235,13 +243,11 @@ func (t *Engine) fetchOrCreateState(uuid uuid, echoer *tsscommv1.PartyId, echoed
 		return nil, fmt.Errorf("echoed content is not a signed message") // shouldn't happen, but just in case.
 	}
 
-	hashed := hashSignedMessage(signed)
-
 	if state.isSet() {
 		// if the state is set, then it already saw a signature and accepted it.
 		// so this might be equivication, check if accepted different message:
-		if hashed != *state.messageDigest {
-			return nil, fmt.Errorf("%w:%v", ErrEquivicatingGuardian, echoer)
+		if state.isEquivication(signed) {
+			return nil, t.findEquivicator(signed, echoer)
 		}
 
 		return state, nil
@@ -252,8 +258,10 @@ func (t *Engine) fetchOrCreateState(uuid uuid, echoer *tsscommv1.PartyId, echoed
 	}
 
 	// setting the state to the message.
+	msgDigest := hashSignedMessage(signed)
+
 	state.tssMessage = parsed
-	state.messageDigest = &hashed
+	state.messageDigest = &msgDigest
 	state.trackingId = parsed.WireMsg().TrackingID
 
 	return state, nil
