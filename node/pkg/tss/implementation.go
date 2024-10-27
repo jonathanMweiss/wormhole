@@ -216,7 +216,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		return nil
 	}
 
-	if err == party.ErrNotInSigningCommittee { // no need to return error in this case.
+	if err == party.ErrNotInSigningCommittee {
 		return nil
 	}
 
@@ -340,8 +340,8 @@ func (t *Engine) fpListener() {
 		case m := <-t.fpOutChan:
 			tssMsg, err := t.intoSendable(m)
 			if err == nil {
-				t.messageOutChan <- tssMsg
 				sentMsgCntr.Inc()
+				t.messageOutChan <- tssMsg
 
 				continue
 			}
@@ -374,10 +374,10 @@ func (t *Engine) fpListener() {
 			})
 
 		case sig := <-t.fpSigOutChan:
-			t.sigOutChan <- sig
-
 			sigProducedCntr.Inc()
 			inProgressSigs.Dec()
+
+			t.sigOutChan <- sig
 
 		case <-cleanUpTicker.C:
 			t.cleanup(maxTTL)
