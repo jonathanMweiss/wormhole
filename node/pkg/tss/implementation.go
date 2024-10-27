@@ -234,7 +234,7 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		return nil, fmt.Errorf("the guardian's tss storage is nil")
 	}
 
-	if storage.MaxSimultaneousSignatures <= 0 {
+	if storage.MaxSimultaneousSignatures < 0 {
 		storage.MaxSimultaneousSignatures = defaultMaxLiveSignatures
 	}
 
@@ -263,11 +263,12 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		logger:          &zap.Logger{},
 		GuardianStorage: *storage,
 
-		fpParams:        fpParams,
-		fp:              fp,
-		fpOutChan:       make(chan tss.Message),
-		fpSigOutChan:    make(chan *common.SignatureData),
-		sigOutChan:      make(chan *common.SignatureData),
+		fpParams:  fpParams,
+		fp:        fp,
+		fpOutChan: make(chan tss.Message),
+		fpSigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures*
+			(numBroadcastsPerSignature+numUnicastsRounds*storage.Threshold)),
+		sigOutChan:      make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
 		fpErrChannel:    make(chan *tss.Error),
 		messageOutChan:  make(chan Sendable),
 		msgSerialNumber: 0,

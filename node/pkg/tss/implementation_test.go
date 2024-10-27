@@ -839,6 +839,7 @@ func TestSigCounter(t *testing.T) {
 	ctx = testutils.MakeSupervisorContext(ctx)
 
 	t.Run("MaxCountBlockAdditionalUpdates", func(t *testing.T) {
+		// Tests might fail due to change of the GuardianStorage files
 		engines := load5GuardiansSetupForBroadcastChecks(a)
 		e1 := engines[0]
 
@@ -867,6 +868,7 @@ func TestSigCounter(t *testing.T) {
 	})
 
 	t.Run("ErrorReduceCount", func(t *testing.T) {
+		// Tests might fail due to change of the GuardianStorage files
 		engines := load5GuardiansSetupForBroadcastChecks(a)
 		e1 := engines[0]
 
@@ -890,13 +892,20 @@ func TestSigCounter(t *testing.T) {
 
 		// test:
 		a.Len(e1.sigCounter.digestToGuardians, 1)
-		e1.fpErrChannel <- tss.NewTrackableError(fmt.Errorf("dummyerr"), "de", -1, e1.Self, parsed.WireMsg().TrackingID)
+		select {
+		case e1.fpErrChannel <- tss.NewTrackableError(fmt.Errorf("dummyerr"), "de", -1, e1.Self, parsed.WireMsg().TrackingID):
+		case <-time.After(time.Second * 1):
+			t.FailNow()
+			return
+		}
+
 		time.Sleep(time.Millisecond * 500)
 
 		a.Len(e1.sigCounter.digestToGuardians, 0)
 	})
 
 	t.Run("sigDoneReduceCount", func(t *testing.T) {
+		// Tests might fail due to change of the GuardianStorage files
 		engines := load5GuardiansSetupForBroadcastChecks(a)
 		e1 := engines[0]
 
@@ -962,9 +971,16 @@ func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
 
 	var msg Sendable
 	for i := 0; i < round1NumberOfMessages(e1); i++ { // cleaning the channel, and taking one of the messages.
-		tmp := <-e1.ProducedOutputMessages()
-		if !tmp.IsBroadcast() {
-			msg = tmp
+		select {
+		case tmp := <-e1.ProducedOutputMessages():
+			if !tmp.IsBroadcast() {
+				msg = tmp
+			}
+
+		case <-time.After(time.Second * 2):
+			// This means the signer wasn't one of the signing committees. (did the Guardian storage change?)
+			// if it did, just make sure this engine is expected to sign, else use the right engine in the test.
+			panic("timeout!")
 		}
 	}
 	return msg
