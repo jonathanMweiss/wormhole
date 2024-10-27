@@ -341,7 +341,11 @@ func (t *Engine) fpListener() {
 			tssMsg, err := t.intoSendable(m)
 			if err == nil {
 				sentMsgCntr.Inc()
-				t.messageOutChan <- tssMsg
+
+				select {
+				case t.messageOutChan <- tssMsg:
+				case <-t.ctx.Done():
+				}
 
 				continue
 			}
@@ -377,7 +381,10 @@ func (t *Engine) fpListener() {
 			sigProducedCntr.Inc()
 			inProgressSigs.Dec()
 
-			t.sigOutChan <- sig
+			select {
+			case t.sigOutChan <- sig:
+			case <-t.ctx.Done():
+			}
 
 		case <-cleanUpTicker.C:
 			t.cleanup(maxTTL)
