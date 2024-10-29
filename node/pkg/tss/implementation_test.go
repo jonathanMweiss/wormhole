@@ -14,6 +14,7 @@ import (
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	tsscommon "github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
@@ -549,6 +550,8 @@ func TestE2E(t *testing.T) {
 	// all will attempt to sign a single message, while outputing messages to each other,
 	// and reliably broadcasting them.
 
+	inProgressSigs.Set(0) // reseting the gauge.
+
 	a := assert.New(t)
 	engines := loadGuardians(a)
 
@@ -567,17 +570,49 @@ func TestE2E(t *testing.T) {
 	dnchn := msgHandler(ctx, engines)
 
 	fmt.Println("engines started, requesting sigs")
+
+	m := dto.Metric{}
+	inProgressSigs.Write(&m)
+	a.Equal(0, int(m.Gauge.GetValue()))
+
 	// all engines are started, now we can begin the protocol.
 	for _, engine := range engines {
 		tmp := make([]byte, 32)
 		copy(tmp, dgst[:])
 		engine.BeginAsyncThresholdSigningProtocol(tmp)
 	}
+
+	inProgressSigs.Write(&m)
+	a.Equal(engines[0].Threshold+1, int(m.Gauge.GetValue()))
+
 	select {
 	case <-dnchn:
 	case <-ctx.Done():
 		t.FailNow()
+		return
 	}
+
+	time.Sleep(time.Millisecond * 500) // ensuring all other engines have finished and not just one of them.
+	inProgressSigs.Write(&m)
+	a.Equal(0, int(m.Gauge.GetValue())) // ensuring nothing is in progress.
+
+	sigProducedCntr.Write(&m)
+	a.Equal(engines[0].Threshold+1, int(m.Counter.GetValue()))
+
+	sentMsgCntr.Write(&m)
+	committeeSize := engines[0].Threshold + 1
+	numBroadcastRounds := 8
+	numUnicastRounds := 2
+	numUnicastSendRequestsPerGuardian := engines[0].Threshold * numUnicastRounds
+	a.Equal(committeeSize*(numBroadcastRounds+numUnicastSendRequestsPerGuardian), int(m.Counter.GetValue()))
+
+	receivedMsgCntr.Write(&m)
+	// n^2 * (numBroadcastRounds + numUnicastRounds)
+	a.Greater(int(m.Counter.GetValue()), committeeSize*committeeSize*(numBroadcastRounds+numUnicastRounds))
+
+	deliveredMsgCntr.Write(&m)
+	// messages from committeeSize are delivered numBroadcastRounds times by each guardian.
+	a.Equal(committeeSize*numBroadcastRounds*len(engines), int(m.Counter.GetValue()))
 }
 
 func TestMessagesWithBadRounds(t *testing.T) {
@@ -754,8 +789,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 					select {
 					case <-ctx.Done():
 						return
-					case <-signalSuccess:
-						return
+
 					case msg := <-chns[engine.Self.Id]:
 						engine.HandleIncomingTssMessage(&IncomingMessage{
 							Source:  msg.Sender,
@@ -772,6 +806,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 					select {
 					case <-ctx.Done():
 						return
+
 					case m := <-engine.ProducedOutputMessages():
 						if m.IsBroadcast() {
 							broadcast(chns, engine, m)
@@ -779,10 +814,6 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						}
 						unicast(m, chns, engine)
 					case sig := <-engine.ProducedSignature():
-						once.Do(func() {
-							close(signalSuccess)
-						})
-
 						signature := append(sig.Signature, sig.SignatureRecovery...)
 						address := engine.GetEthAddress()
 
@@ -796,9 +827,10 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						if addr != address {
 							panic("recovered address does not match provided address")
 						}
-						return
-					case <-signalSuccess:
-						return
+
+						once.Do(func() {
+							close(signalSuccess)
+						})
 					}
 				}
 			}()

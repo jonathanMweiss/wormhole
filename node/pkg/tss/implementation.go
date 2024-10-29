@@ -268,7 +268,8 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		fpOutChan: make(chan tss.Message),
 		fpSigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures*
 			(numBroadcastsPerSignature+numUnicastsRounds*storage.Threshold)),
-		sigOutChan:      make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
+		sigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
+
 		fpErrChannel:    make(chan *tss.Error),
 		messageOutChan:  make(chan Sendable),
 		msgSerialNumber: 0,
@@ -351,10 +352,13 @@ func (t *Engine) fpListener() {
 			return
 		case m := <-t.fpOutChan:
 			t.handleFpOutput(m)
+
 		case err := <-t.fpErrChannel:
 			t.handleFpError(err)
+
 		case sig := <-t.fpSigOutChan:
 			t.handleFpSignature(sig)
+
 		case <-cleanUpTicker.C:
 			t.cleanup(maxTTL)
 		}
@@ -387,6 +391,7 @@ func (t *Engine) handleFpError(err *tss.Error) {
 	// if someone sent a message that caused an error -> we don't
 	// accept an override to that message, therefore, we can remove it, since it won't change.
 	t.sigCounter.remove(trackid)
+	inProgressSigs.Dec()
 
 	logErr(t.logger, &logableError{
 		fmt.Errorf("error in signing protocol: %w", err.Cause()),
