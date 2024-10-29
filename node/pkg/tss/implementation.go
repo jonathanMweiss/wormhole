@@ -566,13 +566,9 @@ func (t *Engine) sendEchoOut(m Incoming, parsed tss.ParsedMessage) error {
 var errBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", round1Message1, round2Message)
 
 func (t *Engine) handleEcho(m Incoming) (err error) {
-	content, err := t.parseEcho(m)
+	content, err := t.extractEchoContent(m)
 	if err != nil {
-		return logableError{
-			fmt.Errorf("couldn't parse echo payload: %w", err),
-			nil,
-			"",
-		}
+		return logableError{fmt.Errorf("couldn't parse echo payload: %w", err), nil, ""}
 	}
 
 	switch {
@@ -581,7 +577,6 @@ func (t *Engine) handleEcho(m Incoming) (err error) {
 			return fmt.Errorf("hashed echoes are not allowed in reliable broadcast operation mode")
 		}
 
-		// We never echo a hashed message.
 		toDeliver, err := t.hashBroadcastInspection(content.HashedMessage, m.GetSource())
 		if err != nil {
 			return err
@@ -610,35 +605,25 @@ func (t *Engine) handleEcho(m Incoming) (err error) {
 }
 
 func (t *Engine) handleEchoWithContent(m Incoming, parsed tss.ParsedMessage) (shouldEcho bool, err error) {
+	trackid := parsed.WireMsg().GetTrackingID()
+
 	rnd, err := getRound(parsed)
 	if err != nil {
 		return shouldEcho,
-			logableError{
-				fmt.Errorf("couldn't extract round from echo: %w", err),
-				parsed.WireMsg().GetTrackingID(),
-				"",
-			}
+			logableError{fmt.Errorf("couldn't extract round from echo: %w", err), trackid, ""}
 	}
 
 	// according to gg18 (tss ecdsa paper), unicasts are sent in these rounds.
 	// only in Echo case.
 	if rnd == round1Message1 || rnd == round2Message {
 		return shouldEcho,
-			logableError{
-				errBadRoundsInEcho,
-				parsed.WireMsg().GetTrackingID(),
-				rnd,
-			}
+			logableError{errBadRoundsInEcho, trackid, rnd}
 	}
 
 	shouldEcho, shouldDeliver, err := t.relbroadcastInspection(parsed, m)
 	if err != nil {
 		return shouldEcho,
-			logableError{
-				fmt.Errorf("reliable broadcast inspection issue: %w", err),
-				parsed.WireMsg().GetTrackingID(),
-				rnd,
-			}
+			logableError{fmt.Errorf("reliable broadcast inspection issue: %w", err), trackid, rnd}
 	}
 
 	if !shouldDeliver {
@@ -648,11 +633,8 @@ func (t *Engine) handleEchoWithContent(m Incoming, parsed tss.ParsedMessage) (sh
 	deliveredMsgCntr.Inc()
 
 	if err := t.feedIncomingToFp(parsed); err != nil {
-		return shouldEcho, logableError{
-			fmt.Errorf("failed to update the full party: %w", err),
-			parsed.WireMsg().GetTrackingID(),
-			rnd,
-		}
+		return shouldEcho,
+			logableError{fmt.Errorf("failed to update the full party: %w", err), trackid, rnd}
 	}
 
 	return shouldEcho, nil
@@ -680,11 +662,13 @@ func (t *Engine) handleUnicast(m Incoming) error {
 		return logableError{fmt.Errorf("couldn't parse unicast payload: %w", err), nil, ""}
 	}
 
+	trackid := parsed.WireMsg().GetTrackingID()
+
 	// ensuring the reported source of the message matches the claimed source. (parsed.GetFrom() used by the tss-lib)
 	if !equalPartyIds(parsed.GetFrom(), protoToPartyId(m.GetSource())) {
 		return logableError{
 			fmt.Errorf("parsed message sender doesn't match the source of the message"),
-			parsed.WireMsg().GetTrackingID(),
+			trackid,
 			"",
 		}
 	}
@@ -692,19 +676,12 @@ func (t *Engine) handleUnicast(m Incoming) error {
 	rnd, err := getRound(parsed)
 	if err != nil {
 		return logableError{
-			fmt.Errorf("unicast parsing error: %w", err),
-			parsed.WireMsg().GetTrackingID(),
-			"",
-		}
+			fmt.Errorf("unicast parsing error: %w", err), trackid, ""}
 	}
 
 	// only round 1 and round 2 are unicasts.
 	if rnd != round1Message1 && rnd != round2Message {
-		return logableError{
-			errUnicastBadRound,
-			parsed.WireMsg().GetTrackingID(),
-			rnd,
-		}
+		return logableError{errUnicastBadRound, trackid, rnd}
 	}
 
 	err = t.validateUnicastDoesntExist(parsed)
@@ -715,17 +692,13 @@ func (t *Engine) handleUnicast(m Incoming) error {
 	if err != nil {
 		return logableError{
 			fmt.Errorf("failed to ensure no equivication present in unicast: %w, sender:%v", err, m.GetSource().Id),
-			parsed.WireMsg().GetTrackingID(),
+			trackid,
 			rnd,
 		}
 	}
 
 	if err := t.feedIncomingToFp(parsed); err != nil {
-		return logableError{
-			fmt.Errorf("unicast failed to update the full party: %w", err),
-			parsed.WireMsg().GetTrackingID(),
-			rnd,
-		}
+		return logableError{fmt.Errorf("unicast failed to update the full party: %w", err), trackid, rnd}
 	}
 
 	return nil
@@ -782,7 +755,7 @@ type echoContent struct {
 	*tsscommv1.HashedMessage
 }
 
-func (t *Engine) parseEcho(m Incoming) (*echoContent, error) {
+func (t *Engine) extractEchoContent(m Incoming) (*echoContent, error) {
 	echoMsg := m.toEcho()
 	if err := vaidateEchoCorrectForm(echoMsg); err != nil {
 		return nil, err
@@ -864,8 +837,8 @@ func (st *GuardianStorage) sign(msg *tsscommv1.SignedMessage) error {
 }
 
 var ErrInvalidSignature = fmt.Errorf("invalid signature")
-
 var errEmptySignature = fmt.Errorf("empty signature")
+var errNonECDSAKey = fmt.Errorf("certificated stored with non-ecdsa public key, guardian storage is corrupted")
 
 func (st *GuardianStorage) verifySignedMessage(msg *tsscommv1.SignedMessage) error {
 	if msg == nil {
@@ -883,7 +856,7 @@ func (st *GuardianStorage) verifySignedMessage(msg *tsscommv1.SignedMessage) err
 
 	pk, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
-		return fmt.Errorf("certificated stored with non-ecdsa public key, guardian storage is corrupted")
+		return errNonECDSAKey
 	}
 
 	digest := hashSignedMessage(msg)
