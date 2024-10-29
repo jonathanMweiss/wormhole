@@ -78,6 +78,7 @@ func (t *Engine) updateStateFromSigned(s *broadcaststate, msg *tsscommv1.SignedM
 	// It is possible that the same guardian sends two different messages for the same round and session.
 	// We do not accept messages with the same uuid and different content.
 	if s.isEquivication(msg) {
+		//checked in the fetchOrCreateState function, so it should never reach this point.
 		return false, t.findEquivicator(msg, echoer)
 	}
 
@@ -137,9 +138,10 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 	return (st.Threshold) / 2 // this is the floor of the result.
 }
 
-// broadcastInspection is responsible for either reliable-broadcast logic (Bracha's algorithm),
-// or hashed-broadcast channel logic (similar but less robust - without message duplications).
-// Not allowed to authorise echoing.
+// hashBroadcastInspection is responsible for hashed-broadcast channel logic when receiving echo with HashedMessage.
+// mainly collect votes, and ensures that if f*2+1 saw the same digest for UUID, then once this engine sees the same UUID, it'll deliver it.
+// if it hadn't seen 2f+1 messages, it wont deliver it.
+// Not allowed to echo, since this function doesn't seen signed messages, only hashed echoes.
 func (t *Engine) hashBroadcastInspection(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) (toDeliver tss.ParsedMessage, err error) {
 	if t.UseReliableBroadcast {
 		return toDeliver, fmt.Errorf("received hashed message, but reliable broadcast is enabled")

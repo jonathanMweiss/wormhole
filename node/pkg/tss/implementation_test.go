@@ -232,6 +232,64 @@ func TestHashBroadcast(t *testing.T) {
 		}
 	})
 
+	t.Run("leaderFirst", func(t *testing.T) {
+		// receive signed message first, then hashed echoes:
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+		e1, e2, e3 := engines[0], engines[1], engines[2]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+
+			// then hashed messages:
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// last vote needed:
+			incomingHashedEcho.setSource(e3.Self)
+			toDeliver, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Equal(parsed1, toDeliver)
+		}
+	})
+
+	t.Run("BadVotes", func(t *testing.T) {
+		// Received votes for a different digest then what i've seen: should not deliver!
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+		e1 := engines[0]
+
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+
+			// then hashed messages:
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.toEcho().GetHashed().Digest[0] += 1 // changing vote!
+
+			for _, e := range engines[1:] {
+				incomingHashedEcho.setSource(e.Self)
+
+				toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+				a.NoError(err)
+				a.Nil(toDeliver)
+			}
+		}
+	})
+
 }
 
 func TestRelBroadcast(t *testing.T) {
