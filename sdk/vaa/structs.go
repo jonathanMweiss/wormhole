@@ -886,7 +886,7 @@ func (v *VAA) UnmarshalBinary(data []byte) error {
 
 func VersionHasStringRepresentation(ver *uint8) bool {
 	// MultiSigVAA didn't add version to the ID (backward compatibility).
-	return ver != nil && *ver != VaaVersion1
+	return ver != nil && *ver == TSSVaaVersion
 }
 
 func (v *VAA) VersionHasStringRepresentation() bool {
