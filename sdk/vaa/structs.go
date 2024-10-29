@@ -573,14 +573,14 @@ const (
 	// MultiSigVaaVersion depicts a VAA generated with multi-signatures, where each
 	// guardian adds its signature. A valid VAA should have quorumSize
 	// signatures from its guardians.
-	MultiSigVaaVersion = 0x01
+	VaaVersion1 = 0x01
 
 	// TSSVaaVersion uses a threshold signature scheme to sign the VAA struct.
 	// As a result, a valid VAA would result in a single signature.
 	TSSVaaVersion = 0x02
 )
 
-var SupportedVAAVersions = map[uint8]bool{MultiSigVaaVersion: true, TSSVaaVersion: true}
+var SupportedVAAVersions = map[uint8]bool{VaaVersion1: true, TSSVaaVersion: true}
 
 // UnmarshalBody deserializes the binary representation of a VAA's "BODY" properties
 // The BODY fields are common among multiple types of VAA - v1, v2, etc
@@ -809,7 +809,7 @@ func (v *VAA) Verify(addresses []common.Address) error {
 	var err error = nil
 
 	switch v.Version {
-	case MultiSigVaaVersion:
+	case VaaVersion1:
 		err = v.v1Validation(addresses)
 	case TSSVaaVersion:
 		err = v.tssValidation(addresses)
@@ -886,7 +886,7 @@ func (v *VAA) UnmarshalBinary(data []byte) error {
 
 func VersionHasStringRepresentation(ver *uint8) bool {
 	// MultiSigVAA didn't add version to the ID (backward compatibility).
-	return ver != nil && *ver != MultiSigVaaVersion
+	return ver != nil && *ver != VaaVersion1
 }
 
 func (v *VAA) VersionHasStringRepresentation() bool {

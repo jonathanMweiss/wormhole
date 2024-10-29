@@ -887,7 +887,7 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int, inf
 }
 
 func pollApiAndInspectVaa(t *testing.T, ctx context.Context, msg *common.MessagePublication, testCase testCase, c publicrpcv1.PublicRPCServiceClient, gsAddrList []eth_common.Address, gs []*mockGuardian) {
-	ver := uint32(vaa.MultiSigVaaVersion)
+	ver := uint32(vaa.VaaVersion1)
 	if testCase.tssVaaVersionChecks {
 		ver = uint32(vaa.TSSVaaVersion)
 	}

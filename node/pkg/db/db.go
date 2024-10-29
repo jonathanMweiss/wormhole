@@ -36,7 +36,7 @@ func VaaIDFromString(s string) (*VAAID, error) {
 		return nil, errors.New("invalid message id")
 	}
 
-	vaaVersion := uint8(vaa.MultiSigVaaVersion)
+	vaaVersion := uint8(vaa.VaaVersion1)
 	if len(parts) == 4 {
 		v, err := strconv.ParseUint(parts[3], 10, 8)
 		if err != nil {
