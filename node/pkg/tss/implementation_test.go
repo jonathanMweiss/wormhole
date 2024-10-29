@@ -89,10 +89,9 @@ func (i *IncomingMessage) setSource(id *tss.PartyID) {
 }
 
 func TestHashBroadcast(t *testing.T) {
-	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign (f<=1).
+	a := assert.New(t)
+	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign.
 	t.Run("NotDeliverWithoutContent", func(t *testing.T) {
-		a := assert.New(t)
-		// f = 1, n = 5
 		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		e1 := engines[0]
@@ -118,8 +117,6 @@ func TestHashBroadcast(t *testing.T) {
 	})
 
 	t.Run("NotDeliverWithoutEnoughVotes", func(t *testing.T) {
-		a := assert.New(t)
-		// f = 1, n = 5
 		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		e1, e2, e3 := engines[0], engines[1], engines[2]
@@ -156,8 +153,6 @@ func TestHashBroadcast(t *testing.T) {
 	})
 
 	t.Run("regRun", func(t *testing.T) {
-		a := assert.New(t)
-		// f = 1, n = 5
 		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		e1, e2, e3 := engines[0], engines[1], engines[2]
@@ -187,34 +182,60 @@ func TestHashBroadcast(t *testing.T) {
 	})
 
 	t.Run("NoChangingVote", func(t *testing.T) {
-		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
-		t.FailNow()
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+
+		e1, e2 := engines[0], engines[1]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			incomingHashedEcho.setSource(e2.Self)
+			incomingHashedEcho.toEcho().GetHashed().Digest[0] += 1 // changing vote!
+
+			_, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.ErrorContains(err, "changed its vote")
+		}
 	})
 
+	// don't count the HashMessage and Echo+SignedMessage as two different votes.
 	t.Run("NoDoubleCount", func(t *testing.T) {
-		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
-		t.FailNow()
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+
+		e1, e2, e3 := engines[0], engines[1], engines[2]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e1.Self)
+
+			echo, deliver, err := e2.relbroadcastInspection(parsed1, parsedIntoEcho(a, e1, parsed1))
+			a.NoError(err)
+			a.True(echo)
+			a.False(deliver)
+
+			incomingHashedEcho.setSource(e3.Self)
+			toDeliver, err := e2.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// should not be counted:
+			incomingHashedEcho.setSource(e1.Self)
+			toDeliver, err = e2.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+		}
 	})
 
-	t.Run("NoDeliverTwice", func(t *testing.T) {
-		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
-		t.FailNow()
-	})
-
-	t.Run("NotEchoIfNotLeaderInHashedMode", func(t *testing.T) {
-		// TODO: Consider what we want, mix mode or not. if in mix mode, should hash echoes be counted?
-		// I think Mix mode shouldn't happen at all. So we might need to add a check for that.
-		t.FailNow()
-	})
 }
 
 func TestRelBroadcast(t *testing.T) {
-
-	t.Run("NoChangingVote", func(t *testing.T) {
-		// TODO: ensure that if someone sent both a hashed and a regular echo, we don't deliver.
-		t.FailNow()
-	})
-
 	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign (f<=1).
 	t.Run("forLeaderCreatingMessage", func(t *testing.T) {
 		a := assert.New(t)

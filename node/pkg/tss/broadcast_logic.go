@@ -105,6 +105,9 @@ func (s *broadcaststate) updateFromSigned(echoer *tsscommv1.PartyId, msg *tsscom
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
+	// No need to check for vote changing here:
+	// if we reached this part, then the message was checked for equivication.
+	// changing vote requires a signature on a different message, so it'll have a different digest.
 	s.votes[voterId(echoer.Id)] = hashSignedMessage(msg)
 	if s.echoedAlready {
 		return shouldEcho, err
@@ -170,7 +173,7 @@ func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoe
 	copy(newVote[:], hashed.Digest)
 
 	if oldVote, ok := s.votes[voterId(echoer.Id)]; ok && oldVote != newVote {
-		return fmt.Errorf("%v, changed its vote, from %v to %v", echoer, oldVote, newVote)
+		return fmt.Errorf("%v, changed its vote", echoer)
 	}
 
 	s.votes[voterId(echoer.Id)] = newVote
