@@ -53,7 +53,6 @@ func parsedIntoHashEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessag
 						Hashed: &tsscommv1.HashedMessage{
 							Uuid:   uid[:],
 							Digest: dgst[:],
-							Origin: partyIdToProto(t.Self),
 						},
 					},
 				},
@@ -92,7 +91,7 @@ func TestHashBroadcast(t *testing.T) {
 	a := assert.New(t)
 	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign.
 	t.Run("NotDeliverWithoutContent", func(t *testing.T) {
-		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
 
 		e1 := engines[0]
 		for j, rnd := range allRounds {
@@ -117,7 +116,7 @@ func TestHashBroadcast(t *testing.T) {
 	})
 
 	t.Run("NotDeliverWithoutEnoughVotes", func(t *testing.T) {
-		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
 
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 
@@ -153,7 +152,7 @@ func TestHashBroadcast(t *testing.T) {
 	})
 
 	t.Run("regRun", func(t *testing.T) {
-		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
 
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 		for j, rnd := range allRounds {
@@ -182,7 +181,7 @@ func TestHashBroadcast(t *testing.T) {
 	})
 
 	t.Run("NoChangingVote", func(t *testing.T) {
-		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
 
 		e1, e2 := engines[0], engines[1]
 		for j, rnd := range allRounds {
@@ -205,7 +204,7 @@ func TestHashBroadcast(t *testing.T) {
 
 	// don't count the HashMessage and Echo+SignedMessage as two different votes.
 	t.Run("NoDoubleCount", func(t *testing.T) {
-		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
 
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 		for j, rnd := range allRounds {
@@ -237,9 +236,19 @@ func TestHashBroadcast(t *testing.T) {
 
 func TestRelBroadcast(t *testing.T) {
 	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign (f<=1).
+	a := assert.New(t)
+	t.Run("CheckHashBroadcastRejected", func(t *testing.T) {
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		e1 := engines[0]
+
+		parsed := generateFakeMessageWithRandomContent(e1.Self, e1.Self, round1Message1, party.Digest{1})
+		ech := parsedIntoHashEcho(a, e1, parsed)
+
+		err := e1.handleIncomingTssMessage(ech)
+		a.Error(err)
+	})
+
 	t.Run("forLeaderCreatingMessage", func(t *testing.T) {
-		a := assert.New(t)
-		// f = 1, n = 5
 		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		e1 := engines[0]
@@ -258,7 +267,6 @@ func TestRelBroadcast(t *testing.T) {
 	})
 
 	t.Run("forEnoughEchos", func(t *testing.T) {
-		a := assert.New(t)
 		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 
@@ -286,7 +294,7 @@ func TestRelBroadcast(t *testing.T) {
 }
 
 func load5GuardiansSetupForrelBroadcastChecks(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(5, false) // f=1, n=5.
+	engines, err := _loadGuardians(5, true) // f=1, n=5.
 	a.NoError(err)
 
 	for _, v := range engines {
@@ -296,6 +304,14 @@ func load5GuardiansSetupForrelBroadcastChecks(a *assert.Assertions) []*Engine {
 	return engines
 }
 
+func load5GuardiansSetupForHashBroadcastChecks(a *assert.Assertions) []*Engine {
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
+	for _, engine := range engines {
+		engine.GuardianStorage.UseReliableBroadcast = false
+	}
+
+	return engines
+}
 func TestDeliver(t *testing.T) {
 	t.Run("After2fPlus1Messages", func(t *testing.T) {
 		a := assert.New(t)

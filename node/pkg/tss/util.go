@@ -194,10 +194,6 @@ func validateHashedCorrectForm(s *tsscommv1.HashedMessage) error {
 		return ErrEchoedContentIsNil
 	}
 
-	if err := validatePartIdProtoCorrectForm(s.Origin); err != nil {
-		return fmt.Errorf("seen sender pID error:%w", err)
-	}
-
 	if len(s.Uuid) != len(uuid{}) {
 		return fmt.Errorf("seen UUID not in correct form")
 	}

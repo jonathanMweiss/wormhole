@@ -549,7 +549,6 @@ func (t *Engine) sendEchoOut(m Incoming, parsed tss.ParsedMessage) error {
 		hashed := &tsscommv1.HashedMessage{
 			Uuid:   uid[:],
 			Digest: hs[:],
-			Origin: signed.Message.Sender,
 		}
 
 		content.Echoed = &tsscommv1.Echo_Hashed{Hashed: hashed}
@@ -576,7 +575,12 @@ func (t *Engine) handleEcho(m Incoming) (err error) {
 		}
 	}
 
-	if !t.GuardianStorage.UseReliableBroadcast && !content.isParsedMessage {
+	switch {
+	case content.HashedMessage != nil:
+		if t.GuardianStorage.UseReliableBroadcast {
+			return fmt.Errorf("hashed echoes are not allowed in reliable broadcast operation mode")
+		}
+
 		// We never echo a hashed message.
 		toDeliver, err := t.hashBroadcastInspection(content.HashedMessage, m.GetSource())
 		if err != nil {
@@ -590,15 +594,16 @@ func (t *Engine) handleEcho(m Incoming) (err error) {
 		deliveredMsgCntr.Inc()
 
 		return t.feedIncomingToFp(toDeliver)
-	}
 
-	shouldEcho, err := t.handleEchoWithContent(m, content.ParsedMessage)
-	if err != nil {
-		return err
-	}
+	case content.ParsedMessage != nil:
+		shouldEcho, err := t.handleEchoWithContent(m, content.ParsedMessage)
+		if err != nil {
+			return err
+		}
 
-	if shouldEcho {
-		t.sendEchoOut(m, content.ParsedMessage)
+		if shouldEcho {
+			t.sendEchoOut(m, content.ParsedMessage)
+		}
 	}
 
 	return nil
@@ -773,7 +778,6 @@ var (
 )
 
 type echoContent struct {
-	isParsedMessage bool
 	tss.ParsedMessage
 	*tsscommv1.HashedMessage
 }
@@ -784,34 +788,26 @@ func (t *Engine) parseEcho(m Incoming) (*echoContent, error) {
 		return nil, err
 	}
 
-	var senderId *tsscommv1.PartyId
-	isHashedMsg := false
 	switch v := echoMsg.Echoed.(type) {
 	case *tsscommv1.Echo_Message:
-		senderId = v.Message.Sender
+		senderPid := protoToPartyId(v.Message.Sender)
 
+		if !t.GuardianStorage.contains(senderPid) {
+			return nil, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
+		}
+
+		prsd, err := tss.ParseWireMessage(v.Message.Content.Payload, senderPid, true)
+		if err != nil {
+			return nil, err
+		}
+
+		return &echoContent{prsd, nil}, nil
 	case *tsscommv1.Echo_Hashed:
-		senderId = v.Hashed.Origin
-		isHashedMsg = true
+		return &echoContent{nil, echoMsg.Echoed.(*tsscommv1.Echo_Hashed).Hashed}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown echo type: %T", v)
 	}
-
-	senderPid := protoToPartyId(senderId)
-	if !t.GuardianStorage.contains(senderPid) {
-		return nil, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
-	}
-
-	if isHashedMsg {
-		return &echoContent{false, nil, echoMsg.Echoed.(*tsscommv1.Echo_Hashed).Hashed}, nil
-	}
-
-	v := echoMsg.Echoed.(*tsscommv1.Echo_Message)
-
-	prsd, err := tss.ParseWireMessage(v.Message.Content.Payload, senderPid, true)
-	if err != nil {
-		return nil, err
-	}
-
-	return &echoContent{true, prsd, nil}, nil
 }
 
 // SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.

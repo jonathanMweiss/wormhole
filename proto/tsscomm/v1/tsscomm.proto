@@ -32,7 +32,7 @@ message TssContent{
 message HashedMessage {
    bytes uuid=1;
    bytes digest=2;
-   PartyId origin = 3; // TODO: Consider if needed. 
+  //  PartyId origin = 3; // TODO: Consider if needed. 
 }
 
 // SignedMessage is the content of a broadcast message. It may be echoed and as a result requires a signature.
