@@ -67,7 +67,8 @@ func (c *activeSigCounter) add(d []byte, guardian *tss.PartyID, maxActiveSignatu
 		return true
 	}
 
-	// the guardian hasn't yet participated in this signing for the digest, we must ensure an additional signature is allowed
+	// the guardian hasn't yet participated in this signing for the digest,
+	// we must ensure an additional signature is allowed
 	if len(c.guardianToDigests[strPartyId])+1 > maxActiveSignaturesPerGuardian {
 		return false
 	}

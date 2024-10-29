@@ -93,7 +93,7 @@ func newEcho(msg any, recipients []*tsscommv1.PartyId) *Echo {
 
 	switch v := msg.(type) {
 	case *tsscommv1.Echo:
-		res = &Echo{Echo: msg.(*tsscommv1.Echo)}
+		res = &Echo{Echo: v}
 	case *tsscommv1.Echo_Message:
 		res = &Echo{Echo: &tsscommv1.Echo{Echoed: &tsscommv1.Echo_Message{Message: v.Message}}}
 	case *tsscommv1.Echo_Hashed:
@@ -109,7 +109,6 @@ func newEcho(msg any, recipients []*tsscommv1.PartyId) *Echo {
 	res.Recipients = recipients
 
 	return res
-
 }
 
 // GetDestinations implements Sendable.

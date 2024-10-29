@@ -224,6 +224,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	err := t.fp.AsyncRequestNewSignature(d)
 	if err == nil {
 		inProgressSigs.Inc()
+
 		return nil
 	}
 
@@ -431,7 +432,6 @@ func (t *Engine) handleFpOutput(m tss.Message) {
 }
 
 func (t *Engine) cleanup(maxTTL time.Duration) {
-
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
@@ -675,8 +675,7 @@ func (t *Engine) handleUnicast(m Incoming) error {
 
 	rnd, err := getRound(parsed)
 	if err != nil {
-		return logableError{
-			fmt.Errorf("unicast parsing error: %w", err), trackid, ""}
+		return logableError{fmt.Errorf("unicast parsing error: %w", err), trackid, ""}
 	}
 
 	// only round 1 and round 2 are unicasts.
@@ -776,7 +775,7 @@ func (t *Engine) extractEchoContent(m Incoming) (*echoContent, error) {
 
 		return &echoContent{prsd, nil}, nil
 	case *tsscommv1.Echo_Hashed:
-		return &echoContent{nil, echoMsg.Echoed.(*tsscommv1.Echo_Hashed).Hashed}, nil
+		return &echoContent{nil, v.Hashed}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown echo type: %T", v)
@@ -785,8 +784,10 @@ func (t *Engine) extractEchoContent(m Incoming) (*echoContent, error) {
 
 // SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.
 //
-// We don't add the content of the message to the uuid, instead we collect all data that can put this message in a context.
-// this is used by the reliable broadcast to check no two messages from the same sender will be used to update the full party
+// We don't add the content of the message to the uuid, instead we collect all
+// data that can put this message in a context.
+// this is used by the reliable broadcast to check no two messages from the same sender will
+// be used to update the full party
 // in the same round for the specific session of the protocol.
 func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (uuid, error) {
 	// The TackingID of a parsed message is tied to the run of the protocol for a single

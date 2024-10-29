@@ -52,6 +52,7 @@ func (t *Engine) shouldDeliver(s *broadcaststate) bool {
 	}
 
 	nmVotes := 0
+
 	for _, dgst := range s.votes {
 		if dgst == *s.messageDigest {
 			nmVotes++
@@ -138,8 +139,10 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 	return (st.Threshold) / 2 // this is the floor of the result.
 }
 
-// hashBroadcastInspection is responsible for hashed-broadcast channel logic when receiving echo with HashedMessage.
-// mainly collect votes, and ensures that if f*2+1 saw the same digest for UUID, then once this engine sees the same UUID, it'll deliver it.
+// hashBroadcastInspection is responsible for hashed-broadcast channel logic when
+// receiving echo with HashedMessage.
+// mainly collect votes, and ensures that if f*2+1 saw the same digest for UUID,
+// then once this engine sees the same UUID, it'll deliver it.
 // if it hadn't seen 2f+1 messages, it wont deliver it.
 // Not allowed to echo, since this function doesn't seen signed messages, only hashed echoes.
 func (t *Engine) hashBroadcastInspection(hashed *tsscommv1.HashedMessage, echoer *tsscommv1.PartyId) (toDeliver tss.ParsedMessage, err error) {
@@ -241,7 +244,8 @@ func (t *Engine) fetchOrCreateState(uuid uuid, echoer *tsscommv1.PartyId, echoed
 		t.received[uuid] = state
 	}
 
-	if _, ok := echoedContent.(*tsscommv1.HashedMessage); ok { // no more fields to add since hashed message. (no content or sig)
+	if _, ok := echoedContent.(*tsscommv1.HashedMessage); ok {
+		// no more fields to add since hashed message. (no content or sig)
 		return state, nil
 	}
 
