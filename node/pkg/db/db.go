@@ -29,7 +29,8 @@ type VAAID struct {
 	Version        *uint8
 }
 
-// VaaIDFromString parses a <chain>/<address>/<sequence> string into a VAAID.
+// VaaIDFromString parses a <chain>/<address>/<sequence>[/<version number>] string into a VAAID.
+// [/version number] is optional and defaults to vaa.VaaVersion1 (1).
 func VaaIDFromString(s string) (*VAAID, error) {
 	parts := strings.Split(s, "/")
 	if len(parts) != 3 && len(parts) != 4 {
