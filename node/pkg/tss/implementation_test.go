@@ -14,6 +14,9 @@ import (
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	tsscommon "github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
@@ -801,15 +804,61 @@ func TestE2E(t *testing.T) {
 
 	t.Run("E2E-relbroadcast", func(t *testing.T) {
 		engines := loadGuardians(a, true)
+
+		reset_metrics("_e2e_relbroadcast")
+
 		e2erun(a, engines)
 	})
 
 	t.Run("E2E-hashbroadcast", func(t *testing.T) {
 		engines := loadGuardians(a, false)
+
+		reset_metrics("_e2e_hashbroadcast")
+
 		e2erun(a, engines)
 	})
-
 }
+
+func reset_metrics(name string) {
+	inProgressSigs.Set(0)
+	deliveredMsgCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_msg_delivered" + name + "_total",
+			Help: "total number of tss messages fed to the cryptography module",
+		},
+	)
+
+	sentMsgCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_sent" + name + "_total",
+			Help: "total number of tss messages sent (counting broadcasts as 1)",
+		},
+	)
+
+	receivedMsgCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_received" + name + "_total",
+			Help: "total number of tss messages received (including echos)",
+		},
+	)
+
+	inProgressSigs.Set(0)
+
+	sigProducedCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_signature_produced" + name + "_total",
+			Help: "total number of tss signatures produced",
+		},
+	)
+
+	tooManySignersErrCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_too_many_signers_errs" + name + "_total",
+			Help: "total number of tss signing requests that were rejected due to too many signers",
+		},
+	)
+}
+
 func e2erun(a *assert.Assertions, engines []*Engine) {
 	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
@@ -826,6 +875,11 @@ func e2erun(a *assert.Assertions, engines []*Engine) {
 	dnchn := msgHandler(ctx, engines)
 
 	fmt.Println("engines started, requesting sigs")
+
+	m := dto.Metric{}
+	inProgressSigs.Write(&m)
+	a.Equal(0, int(m.Gauge.GetValue()))
+
 	// all engines are started, now we can begin the protocol.
 	for _, engine := range engines {
 		tmp := make([]byte, 32)
@@ -833,11 +887,37 @@ func e2erun(a *assert.Assertions, engines []*Engine) {
 		engine.BeginAsyncThresholdSigningProtocol(tmp)
 	}
 
+	inProgressSigs.Write(&m)
+	a.Equal(engines[0].Threshold+1, int(m.Gauge.GetValue()))
+
 	select {
 	case <-dnchn:
 	case <-ctx.Done():
-		a.FailNow("time-out")
+		a.FailNow("timeout")
+		return
 	}
+
+	time.Sleep(time.Millisecond * 500) // ensuring all other engines have finished and not just one of them.
+	inProgressSigs.Write(&m)
+	a.Equal(0, int(m.Gauge.GetValue())) // ensuring nothing is in progress.
+
+	sigProducedCntr.Write(&m)
+	a.Equal(engines[0].Threshold+1, int(m.Counter.GetValue()))
+
+	sentMsgCntr.Write(&m)
+	committeeSize := engines[0].Threshold + 1
+	numBroadcastRounds := 8
+	numUnicastRounds := 2
+	numUnicastSendRequestsPerGuardian := engines[0].Threshold * numUnicastRounds
+	a.Equal(committeeSize*(numBroadcastRounds+numUnicastSendRequestsPerGuardian), int(m.Counter.GetValue()))
+
+	receivedMsgCntr.Write(&m)
+	// n^2 * (numBroadcastRounds + numUnicastRounds)
+	a.Greater(int(m.Counter.GetValue()), committeeSize*committeeSize*(numBroadcastRounds+numUnicastRounds))
+
+	deliveredMsgCntr.Write(&m)
+	// messages from committeeSize are delivered numBroadcastRounds times by each guardian.
+	a.Equal(committeeSize*numBroadcastRounds*len(engines), int(m.Counter.GetValue()))
 }
 
 func TestMessagesWithBadRounds(t *testing.T) {
@@ -1017,8 +1097,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 					select {
 					case <-ctx.Done():
 						return
-					case <-signalSuccess:
-						return
+
 					case msg := <-chns[engine.Self.Id]:
 						engine.HandleIncomingTssMessage(&IncomingMessage{
 							Source:  msg.Sender,
@@ -1035,6 +1114,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 					select {
 					case <-ctx.Done():
 						return
+
 					case m := <-engine.ProducedOutputMessages():
 						if m.IsBroadcast() {
 							broadcast(chns, engine, m)
@@ -1042,10 +1122,6 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						}
 						unicast(m, chns, engine)
 					case sig := <-engine.ProducedSignature():
-						once.Do(func() {
-							close(signalSuccess)
-						})
-
 						signature := append(sig.Signature, sig.SignatureRecovery...)
 						address := engine.GetEthAddress()
 
@@ -1059,9 +1135,10 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						if addr != address {
 							panic("recovered address does not match provided address")
 						}
-						return
-					case <-signalSuccess:
-						return
+
+						once.Do(func() {
+							close(signalSuccess)
+						})
 					}
 				}
 			}()
@@ -1153,7 +1230,13 @@ func TestSigCounter(t *testing.T) {
 
 		// test:
 		a.Len(e1.sigCounter.digestToGuardians, 1)
-		e1.fpErrChannel <- tss.NewTrackableError(fmt.Errorf("dummyerr"), "de", -1, e1.Self, parsed.WireMsg().TrackingID)
+		select {
+		case e1.fpErrChannel <- tss.NewTrackableError(fmt.Errorf("dummyerr"), "de", -1, e1.Self, parsed.WireMsg().TrackingID):
+		case <-time.After(time.Second * 1):
+			t.FailNow()
+			return
+		}
+
 		time.Sleep(time.Millisecond * 500)
 
 		a.Len(e1.sigCounter.digestToGuardians, 0)
@@ -1225,9 +1308,16 @@ func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
 
 	var msg Sendable
 	for i := 0; i < round1NumberOfMessages(e1); i++ { // cleaning the channel, and taking one of the messages.
-		tmp := <-e1.ProducedOutputMessages()
-		if !tmp.IsBroadcast() {
-			msg = tmp
+		select {
+		case tmp := <-e1.ProducedOutputMessages():
+			if !tmp.IsBroadcast() {
+				msg = tmp
+			}
+
+		case <-time.After(time.Second * 2):
+			// This means the signer wasn't one of the signing committees. (did the Guardian storage change?)
+			// if it did, just make sure this engine is expected to sign, else use the right engine in the test.
+			panic("timeout!")
 		}
 	}
 	return msg

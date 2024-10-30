@@ -16,7 +16,8 @@ type voterId string
 
 type broadcaststate struct {
 	// The following three fields should not be changed after creation of broadcaststate:
-	timeReceived  time.Time
+	timeReceived time.Time
+
 	messageDigest *digest
 	trackingId    []byte
 
@@ -190,6 +191,7 @@ func (s *broadcaststate) updateFromHashed(hashed *tsscommv1.HashedMessage, echoe
 // or for hashed-broadcast channel logic when receiving echo with SignedMessage.
 func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
 	// No need to check input: it was already checked before reaching this point
+
 	signed := msg.toEcho().Echoed.(*tsscommv1.Echo_Message).Message
 	echoer := msg.GetSource()
 
@@ -203,6 +205,7 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 	}
 
 	state, err := t.fetchOrCreateState(uuid, echoer, signed, parsed)
+
 	if err != nil {
 		return false, false, err
 	}
