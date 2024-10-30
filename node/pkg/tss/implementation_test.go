@@ -2,10 +2,10 @@ package tss
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -14,8 +14,11 @@ import (
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	tsscommon "github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
@@ -37,18 +40,41 @@ var (
 	allRounds = append(unicastRounds, broadcastRounds...)
 )
 
+func parsedIntoHashEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *IncomingMessage {
+
+	m := parsedIntoEcho(a, t, parsed)
+	dgst := hashSignedMessage(m.toEcho().Echoed.(*tsscommv1.Echo_Message).Message)
+
+	uid, err := t.getMessageUUID(parsed)
+	a.NoError(err)
+	return &IncomingMessage{
+		Source: partyIdToProto(t.Self),
+		Content: &tsscommv1.PropagatedMessage{
+			Message: &tsscommv1.PropagatedMessage_Echo{
+				Echo: &tsscommv1.Echo{
+					Echoed: &tsscommv1.Echo_Hashed{
+						Hashed: &tsscommv1.HashedMessage{
+							Uuid:   uid[:],
+							Digest: dgst[:],
+						},
+					},
+				},
+			},
+		},
+	}
+}
 func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *IncomingMessage {
 	payload, _, err := parsed.WireBytes()
 	a.NoError(err)
 
 	msg := &tsscommv1.Echo{
-		Message: &tsscommv1.SignedMessage{
+		Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 			Content:   &tsscommv1.TssContent{Payload: payload},
 			Sender:    partyIdToProto(t.Self),
 			Signature: nil,
-		},
+		}},
 	}
-	a.NoError(t.sign(msg.Message))
+	a.NoError(t.sign(msg.Echoed.(*tsscommv1.Echo_Message).Message))
 
 	return &IncomingMessage{
 		Source: partyIdToProto(t.Self),
@@ -64,13 +90,227 @@ func (i *IncomingMessage) setSource(id *tss.PartyID) {
 	i.Source = partyIdToProto(id)
 }
 
-func TestBroadcast(t *testing.T) {
+func TestHashBroadcast(t *testing.T) {
+	a := assert.New(t)
+	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign.
+	t.Run("NotDeliverWithoutContent", func(t *testing.T) {
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
 
+		e1 := engines[0]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+			for _, e := range engines {
+				incomingHashedEcho.setSource(e.Self)
+
+				toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+				a.NoError(err)
+				a.Nil(toDeliver)
+			}
+
+			uid, err := e1.getMessageUUID(parsed1)
+			a.NoError(err)
+
+			st, ok := e1.received[uid]
+			a.True(ok)
+			a.Len(st.votes, len(engines))
+		}
+	})
+
+	t.Run("NotDeliverWithoutEnoughVotes", func(t *testing.T) {
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+
+		e1, e2, e3 := engines[0], engines[1], engines[2]
+
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// message from leader, so it should echo, but not enough values, so it shouldn't deliver.
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+
+			// not delivered when sending an echo from e1 since it already sent its vote (signed message)
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// last vote needed:
+			incomingHashedEcho.setSource(e3.Self)
+			toDeliver, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Equal(parsed1, toDeliver)
+		}
+	})
+
+	t.Run("regRun", func(t *testing.T) {
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+
+		e1, e2, e3 := engines[0], engines[1], engines[2]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// message from leader, so it should echo, but not enough values, so it shouldn't deliver.
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+
+			// last vote needed:
+			incomingHashedEcho.setSource(e3.Self)
+			toDeliver, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Equal(parsed1, toDeliver)
+		}
+	})
+
+	t.Run("NoChangingVote", func(t *testing.T) {
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+
+		e1, e2 := engines[0], engines[1]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			incomingHashedEcho.setSource(e2.Self)
+			incomingHashedEcho.toEcho().GetHashed().Digest[0] += 1 // changing vote!
+
+			_, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.ErrorContains(err, "changed its vote")
+		}
+	})
+
+	// don't count the HashMessage and Echo+SignedMessage as two different votes.
+	t.Run("NoDoubleCount", func(t *testing.T) {
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+
+		e1, e2, e3 := engines[0], engines[1], engines[2]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e1.Self)
+
+			echo, deliver, err := e2.relbroadcastInspection(parsed1, parsedIntoEcho(a, e1, parsed1))
+			a.NoError(err)
+			a.True(echo)
+			a.False(deliver)
+
+			incomingHashedEcho.setSource(e3.Self)
+			toDeliver, err := e2.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// should not be counted:
+			incomingHashedEcho.setSource(e1.Self)
+			toDeliver, err = e2.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+		}
+	})
+
+	t.Run("leaderFirst", func(t *testing.T) {
+		// receive signed message first, then hashed echoes:
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+		e1, e2, e3 := engines[0], engines[1], engines[2]
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+
+			// then hashed messages:
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.setSource(e2.Self)
+			toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Nil(toDeliver)
+
+			// last vote needed:
+			incomingHashedEcho.setSource(e3.Self)
+			toDeliver, err = e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+			a.NoError(err)
+			a.Equal(parsed1, toDeliver)
+		}
+	})
+
+	t.Run("BadVotes", func(t *testing.T) {
+		// Received votes for a different digest then what i've seen: should not deliver!
+		engines := load5GuardiansSetupForHashBroadcastChecks(a)
+		e1 := engines[0]
+
+		for j, rnd := range allRounds {
+			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e1.Self, rnd, party.Digest{byte(j)})
+
+			signedEcho := parsedIntoEcho(a, e1, parsed1)
+			ShouldEcho, shouldDeliver, err := e1.relbroadcastInspection(parsed1, signedEcho)
+			a.NoError(err)
+			a.True(ShouldEcho)
+			a.False(shouldDeliver)
+
+			// then hashed messages:
+			incomingHashedEcho := parsedIntoHashEcho(a, e1, parsed1)
+
+			incomingHashedEcho.toEcho().GetHashed().Digest[0] += 1 // changing vote!
+
+			for _, e := range engines[1:] {
+				incomingHashedEcho.setSource(e.Self)
+
+				toDeliver, err := e1.hashBroadcastInspection(incomingHashedEcho.toEcho().GetHashed(), incomingHashedEcho.GetSource())
+				a.NoError(err)
+				a.Nil(toDeliver)
+			}
+		}
+	})
+
+}
+
+func TestRelBroadcast(t *testing.T) {
 	// The tests here rely on n=5, threshold=2, meaning 3 guardians are needed to sign (f<=1).
+	a := assert.New(t)
+	t.Run("CheckHashBroadcastRejected", func(t *testing.T) {
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		e1 := engines[0]
+
+		parsed := generateFakeMessageWithRandomContent(e1.Self, e1.Self, round1Message1, party.Digest{1})
+		ech := parsedIntoHashEcho(a, e1, parsed)
+
+		err := e1.handleIncomingTssMessage(ech)
+		a.Error(err)
+	})
+
 	t.Run("forLeaderCreatingMessage", func(t *testing.T) {
-		a := assert.New(t)
-		// f = 1, n = 5
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		e1 := engines[0]
 		// make parsedMessage, and insert into e1
@@ -88,8 +328,7 @@ func TestBroadcast(t *testing.T) {
 	})
 
 	t.Run("forEnoughEchos", func(t *testing.T) {
-		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 
 		// two different signers on an echo, meaning it will receive from two players.
@@ -115,8 +354,8 @@ func TestBroadcast(t *testing.T) {
 	})
 }
 
-func load5GuardiansSetupForBroadcastChecks(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(5) // f=1, n=5.
+func load5GuardiansSetupForrelBroadcastChecks(a *assert.Assertions) []*Engine {
+	engines, err := _loadGuardians(5, true) // f=1, n=5.
 	a.NoError(err)
 
 	for _, v := range engines {
@@ -126,10 +365,18 @@ func load5GuardiansSetupForBroadcastChecks(a *assert.Assertions) []*Engine {
 	return engines
 }
 
+func load5GuardiansSetupForHashBroadcastChecks(a *assert.Assertions) []*Engine {
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
+	for _, engine := range engines {
+		engine.GuardianStorage.UseReliableBroadcast = false
+	}
+
+	return engines
+}
 func TestDeliver(t *testing.T) {
 	t.Run("After2fPlus1Messages", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2, e3 := engines[0], engines[1], engines[2]
 
 		// two different signers on an echo, meaning it will receive from two players.
@@ -163,7 +410,7 @@ func TestDeliver(t *testing.T) {
 
 	t.Run("doesn'tDeliverTwice", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2, e3, e4 := engines[0], engines[1], engines[2], engines[3]
 
 		// two different signers on an echo, meaning it will receive from two players.
@@ -204,7 +451,7 @@ func TestDeliver(t *testing.T) {
 
 func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 	for i, rnd := range allRounds {
 		trackingId := party.Digest{byte(i)}
@@ -225,7 +472,7 @@ func TestUuidNotAffectedByMessageContentChange(t *testing.T) {
 func TestEquivocation(t *testing.T) {
 	t.Run("inBroadcastLogic", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2 := engines[0], engines[1]
 
 		for i, rndType := range allRounds {
@@ -247,16 +494,16 @@ func TestEquivocation(t *testing.T) {
 			a.False(shouldDeliver)
 
 			equvicatingEchoerMessage := parsedIntoEcho(a, e2, parsed1)
-			equvicatingEchoerMessage.Content.GetEcho().Message.Content.Payload[0] += 1
+			equvicatingEchoerMessage.Content.GetEcho().Echoed.(*tsscommv1.Echo_Message).Message.Content.Payload[0] += 1
 			// now echoer is equivicating (change content, but of some seen message):
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(parsed1, equvicatingEchoerMessage)
+			_, _, err = e1.relbroadcastInspection(parsed1, equvicatingEchoerMessage)
 			a.ErrorContains(err, e2.Self.Id)
 		}
 	})
 
 	t.Run("inUnicast", func(t *testing.T) {
 		a := assert.New(t)
-		engines := load5GuardiansSetupForBroadcastChecks(a)
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
 		e1, e2 := engines[0], engines[1]
 
 		for i, rndType := range unicastRounds {
@@ -297,10 +544,10 @@ func TestEquivocation(t *testing.T) {
 
 func TestBadInputs(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1, e2 := engines[0], engines[1]
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*60)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
 	defer cancel()
 	ctx = testutils.MakeSupervisorContext(ctx)
 	e1.Start(ctx) // so it has a logger.
@@ -312,7 +559,7 @@ func TestBadInputs(t *testing.T) {
 
 			echo.setSource(e2.Self)
 
-			echo.toEcho().Message.Signature[0] += 1
+			echo.toEcho().Echoed.(*tsscommv1.Echo_Message).Message.Signature[0] += 1
 			_, _, err := e1.relbroadcastInspection(parsed1, echo)
 			a.ErrorIs(err, ErrInvalidSignature)
 
@@ -363,13 +610,13 @@ func TestBadInputs(t *testing.T) {
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{}},
 			},
 		})
-		a.ErrorIs(err, ErrSignedMessageIsNil)
+		a.ErrorIs(err, ErrEchoedContentIsNil)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{
 			Source: partyIdToProto(e2.Self),
 			Content: &tsscommv1.PropagatedMessage{
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-					Message: &tsscommv1.SignedMessage{},
+					Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{}},
 				}}},
 		})
 		a.ErrorIs(err, ErrNilPartyId)
@@ -378,9 +625,9 @@ func TestBadInputs(t *testing.T) {
 			Source: partyIdToProto(e2.Self),
 			Content: &tsscommv1.PropagatedMessage{
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-					Message: &tsscommv1.SignedMessage{
+					Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 						Sender: &tsscommv1.PartyId{},
-					},
+					}},
 				}}},
 		})
 		a.ErrorIs(err, ErrEmptyIDInPID)
@@ -389,42 +636,44 @@ func TestBadInputs(t *testing.T) {
 			Source: partyIdToProto(e2.Self),
 			Content: &tsscommv1.PropagatedMessage{
 				Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-					Message: &tsscommv1.SignedMessage{
+					Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 						Sender: &tsscommv1.PartyId{
 							Id:  "a",
 							Key: []byte{},
 						},
-					},
+					}},
 				}}},
 		})
 		a.ErrorIs(err, ErrEmptyKeyInPID)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
+				Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 					Sender: partyIdToProto(e2.Self),
-				},
+				}},
 			}}},
 		})
 		a.ErrorIs(err, ErrNoContent)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
+				Echoed: &tsscommv1.Echo_Message{Message: &tsscommv1.SignedMessage{
 					Content: &tsscommv1.TssContent{},
 					Sender:  partyIdToProto(e2.Self),
-				},
+				}},
 			}}},
 		})
 		a.ErrorIs(err, ErrNilPayload)
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
-					Content: &tsscommv1.TssContent{
-						Payload: []byte{1, 2, 3},
+				Echoed: &tsscommv1.Echo_Message{
+					Message: &tsscommv1.SignedMessage{
+						Content: &tsscommv1.TssContent{
+							Payload: []byte{1, 2, 3},
+						},
+						Sender: partyIdToProto(e2.Self),
 					},
-					Sender: partyIdToProto(e2.Self),
 				},
 			}}},
 		})
@@ -432,12 +681,14 @@ func TestBadInputs(t *testing.T) {
 
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
-				Message: &tsscommv1.SignedMessage{
-					Content: &tsscommv1.TssContent{
-						Payload: []byte{1, 2, 3},
+				Echoed: &tsscommv1.Echo_Message{
+					Message: &tsscommv1.SignedMessage{
+						Content: &tsscommv1.TssContent{
+							Payload: []byte{1, 2, 3},
+						},
+						Sender:    partyIdToProto(e2.Self),
+						Signature: []byte{1, 2, 3},
 					},
-					Sender:    partyIdToProto(e2.Self),
-					Signature: []byte{1, 2, 3},
 				},
 			}}},
 		})
@@ -446,7 +697,7 @@ func TestBadInputs(t *testing.T) {
 
 	t.Run("Begin signing", func(t *testing.T) {
 		var tmp *Engine = nil
-		engines2 := load5GuardiansSetupForBroadcastChecks(a)
+		engines2 := load5GuardiansSetupForrelBroadcastChecks(a)
 
 		a.ErrorIs(tmp.BeginAsyncThresholdSigningProtocol(nil), errNilTssEngine)
 		a.ErrorIs(e2.BeginAsyncThresholdSigningProtocol(nil), errTssEngineNotStarted)
@@ -470,7 +721,7 @@ func TestBadInputs(t *testing.T) {
 
 func TestFetchPartyId(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 	pid, err := e1.FetchPartyId(e1.guardiansCerts[0])
 	a.NoError(err)
@@ -487,22 +738,22 @@ func TestFetchPartyId(t *testing.T) {
 
 func TestCleanup(t *testing.T) {
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 
-	e1.received[digest{1}] = &broadcaststate{
-		timeReceived: time.Now().Add(time.Minute * 10 * (-1)), // -10 minutes from now.
+	e1.received[uuid{1}] = &broadcaststate{
+		timeReceived: time.Now().Add(time.Minute * 10 * (-1)),
 	}
-	e1.received[digest{2}] = &broadcaststate{
+	e1.received[uuid{2}] = &broadcaststate{
 		timeReceived: time.Now(),
 	}
 
 	e1.cleanup(time.Minute * 5) // if more than 5 minutes passed -> delete
 	a.Len(e1.received, 1)
-	_, ok := e1.received[digest{1}]
+	_, ok := e1.received[uuid{1}]
 	a.False(ok)
 
-	_, ok = e1.received[digest{2}]
+	_, ok = e1.received[uuid{2}]
 	a.True(ok)
 }
 
@@ -529,7 +780,7 @@ func TestRouteCheck(t *testing.T) {
 	// this test is a bit of a hack.
 	// To ensure we don't panic on bad inputs.
 	a := assert.New(t)
-	engines := load5GuardiansSetupForBroadcastChecks(a)
+	engines := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1 := engines[0]
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
@@ -550,11 +801,68 @@ func TestE2E(t *testing.T) {
 	// and reliably broadcasting them.
 
 	a := assert.New(t)
-	engines := loadGuardians(a)
 
+	t.Run("E2E-relbroadcast", func(t *testing.T) {
+		engines := loadGuardians(a, true)
+
+		reset_metrics("_e2e_relbroadcast")
+
+		e2erun(a, engines)
+	})
+
+	t.Run("E2E-hashbroadcast", func(t *testing.T) {
+		engines := loadGuardians(a, false)
+
+		reset_metrics("_e2e_hashbroadcast")
+
+		e2erun(a, engines)
+	})
+}
+
+func reset_metrics(name string) {
+	inProgressSigs.Set(0)
+	deliveredMsgCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_msg_delivered" + name + "_total",
+			Help: "total number of tss messages fed to the cryptography module",
+		},
+	)
+
+	sentMsgCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_sent" + name + "_total",
+			Help: "total number of tss messages sent (counting broadcasts as 1)",
+		},
+	)
+
+	receivedMsgCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_received" + name + "_total",
+			Help: "total number of tss messages received (including echos)",
+		},
+	)
+
+	inProgressSigs.Set(0)
+
+	sigProducedCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_signature_produced" + name + "_total",
+			Help: "total number of tss signatures produced",
+		},
+	)
+
+	tooManySignersErrCntr = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wormhole_tss_too_many_signers_errs" + name + "_total",
+			Help: "total number of tss signing requests that were rejected due to too many signers",
+		},
+	)
+}
+
+func e2erun(a *assert.Assertions, engines []*Engine) {
 	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*60)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
 	defer cancel()
 	ctx = testutils.MakeSupervisorContext(ctx)
 
@@ -585,7 +893,7 @@ func TestE2E(t *testing.T) {
 	select {
 	case <-dnchn:
 	case <-ctx.Done():
-		t.FailNow()
+		a.FailNow("timeout")
 		return
 	}
 
@@ -614,7 +922,7 @@ func TestE2E(t *testing.T) {
 
 func TestMessagesWithBadRounds(t *testing.T) {
 	a := assert.New(t)
-	gs := load5GuardiansSetupForBroadcastChecks(a)
+	gs := load5GuardiansSetupForrelBroadcastChecks(a)
 	e1, e2 := gs[0], gs[1]
 	from := e1.Self
 	to := e2.Self
@@ -650,18 +958,19 @@ func TestMessagesWithBadRounds(t *testing.T) {
 				Source: partyIdToProto(from),
 				Content: &tsscommv1.PropagatedMessage{Message: &tsscommv1.PropagatedMessage_Echo{
 					Echo: &tsscommv1.Echo{
-						Message: &tsscommv1.SignedMessage{
-							Content:   &tsscommv1.TssContent{Payload: bts},
-							Sender:    partyIdToProto(from),
-							Signature: nil,
+						Echoed: &tsscommv1.Echo_Message{
+							Message: &tsscommv1.SignedMessage{
+								Content:   &tsscommv1.TssContent{Payload: bts},
+								Sender:    partyIdToProto(from),
+								Signature: nil,
+							},
 						},
 					},
 				}},
 			}
-			a.NoError(e1.sign(m.Content.GetEcho().Message))
+			a.NoError(e1.sign(m.Content.GetEcho().Echoed.(*tsscommv1.Echo_Message).Message))
 
-			_, err = e2.handleEcho(m)
-			a.ErrorIs(err, errBadRoundsInEcho)
+			a.ErrorIs(e2.handleEcho(m), errBadRoundsInEcho)
 		}
 	})
 }
@@ -730,7 +1039,7 @@ func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
 	return st
 }
 
-func _loadGuardians(numParticipants int) ([]*Engine, error) {
+func _loadGuardians(numParticipants int, isRelbroad bool) ([]*Engine, error) {
 	engines := make([]*Engine, numParticipants)
 
 	for i := 0; i < numParticipants; i++ {
@@ -742,14 +1051,16 @@ func _loadGuardians(numParticipants int) ([]*Engine, error) {
 		if !ok {
 			return nil, errors.New("not an engine")
 		}
+
+		en.GuardianStorage.UseReliableBroadcast = isRelbroad
 		engines[i] = en
 	}
 
 	return engines, nil
 }
 
-func loadGuardians(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(Participants)
+func loadGuardians(a *assert.Assertions, isRelBRoadcast bool) []*Engine {
+	engines, err := _loadGuardians(Participants, isRelBRoadcast)
 	a.NoError(err)
 
 	return engines
@@ -857,4 +1168,163 @@ func broadcast(chns map[string]chan msgg, engine *Engine, m Sendable) {
 			Sendable: m.cloneSelf(),
 		}
 	}
+}
+
+func TestSigCounter(t *testing.T) {
+	a := assert.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
+	defer cancel()
+
+	ctx = testutils.MakeSupervisorContext(ctx)
+
+	t.Run("MaxCountBlockAdditionalUpdates", func(t *testing.T) {
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		e1 := engines[0]
+
+		e1.MaxSimultaneousSignatures = 1
+
+		e1.Start(ctx)
+
+		d := digest{}
+		copy(d[:], "1"+t.Name())
+
+		msg := beginSigningAndGrabMessage(e1, d)
+
+		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
+			Source:  partyIdToProto(e1.Self),
+			Content: msg.GetNetworkMessage(),
+		}))
+
+		// trying to handle a new message for a different signature.
+		copy(d[:], "2"+t.Name())
+		msg = beginSigningAndGrabMessage(e1, d)
+
+		a.ErrorContains(e1.handleIncomingTssMessage(&IncomingMessage{
+			Source:  partyIdToProto(e1.Self),
+			Content: msg.GetNetworkMessage(),
+		}), "reached the maximum number of simultaneous signatures")
+	})
+
+	t.Run("ErrorReduceCount", func(t *testing.T) {
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		e1 := engines[0]
+
+		e1.MaxSimultaneousSignatures = 1
+
+		e1.Start(ctx)
+
+		d := digest{}
+		copy(d[:], "1"+t.Name())
+		msg := beginSigningAndGrabMessage(e1, d)
+
+		incoming := &IncomingMessage{
+			Source:  partyIdToProto(e1.Self),
+			Content: msg.GetNetworkMessage(),
+		}
+
+		a.NoError(e1.handleIncomingTssMessage(incoming))
+
+		parsed, err := e1.parseUnicast(incoming)
+		a.NoError(err)
+
+		// test:
+		a.Len(e1.sigCounter.digestToGuardians, 1)
+		select {
+		case e1.fpErrChannel <- tss.NewTrackableError(fmt.Errorf("dummyerr"), "de", -1, e1.Self, parsed.WireMsg().TrackingID):
+		case <-time.After(time.Second * 1):
+			t.FailNow()
+			return
+		}
+
+		time.Sleep(time.Millisecond * 500)
+
+		a.Len(e1.sigCounter.digestToGuardians, 0)
+	})
+
+	t.Run("sigDoneReduceCount", func(t *testing.T) {
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		e1 := engines[0]
+
+		e1.MaxSimultaneousSignatures = 1
+
+		e1.Start(ctx)
+
+		d := digest{}
+		copy(d[:], "1"+t.Name())
+		msg := beginSigningAndGrabMessage(e1, d)
+
+		incoming := &IncomingMessage{
+			Source:  partyIdToProto(e1.Self),
+			Content: msg.GetNetworkMessage(),
+		}
+
+		a.NoError(e1.handleIncomingTssMessage(incoming))
+
+		parsed, err := e1.parseUnicast(incoming)
+		a.NoError(err)
+
+		// test:
+		a.Len(e1.sigCounter.digestToGuardians, 1)
+		e1.fpSigOutChan <- &tsscommon.SignatureData{
+			Signature:         []byte{},
+			SignatureRecovery: []byte{},
+			R:                 []byte{},
+			S:                 []byte{},
+			M:                 []byte{},
+			TrackingId:        parsed.WireMsg().TrackingID,
+		}
+		time.Sleep(time.Millisecond * 500)
+		a.Len(e1.sigCounter.digestToGuardians, 0)
+	})
+
+	t.Run("CanHaveSimulSigners", func(t *testing.T) {
+		engines := load5GuardiansSetupForrelBroadcastChecks(a)
+		e1 := engines[0]
+		e1.MaxSimultaneousSignatures = 2
+
+		e1.Start(ctx)
+
+		d := digest{}
+		copy(d[:], "1"+t.Name())
+		msg := beginSigningAndGrabMessage(e1, d)
+
+		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
+			Source:  partyIdToProto(e1.Self),
+			Content: msg.GetNetworkMessage(),
+		}))
+
+		copy(d[:], "2"+t.Name())
+		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
+			Source:  partyIdToProto(e1.Self),
+			Content: beginSigningAndGrabMessage(e1, d).GetNetworkMessage(),
+		}))
+
+	})
+}
+
+func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
+	go e1.BeginAsyncThresholdSigningProtocol(d[:])
+
+	var msg Sendable
+	for i := 0; i < round1NumberOfMessages(e1); i++ { // cleaning the channel, and taking one of the messages.
+		select {
+		case tmp := <-e1.ProducedOutputMessages():
+			if !tmp.IsBroadcast() {
+				msg = tmp
+			}
+
+		case <-time.After(time.Second * 2):
+			// This means the signer wasn't one of the signing committees. (did the Guardian storage change?)
+			// if it did, just make sure this engine is expected to sign, else use the right engine in the test.
+			panic("timeout!")
+		}
+	}
+	return msg
+}
+
+func round1NumberOfMessages(e1 *Engine) int {
+	// although threshold is non-inclusive, we only send e1.Threshold since one doesn't includes itself in the unicasts.
+	// the +1 is for the additional broadcast message.
+	return e1.Threshold + 1
 }
