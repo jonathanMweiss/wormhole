@@ -2,6 +2,8 @@ package comm
 
 import (
 	"time"
+
+	"github.com/certusone/wormhole/node/pkg/tss/internal"
 )
 
 const (
@@ -15,7 +17,8 @@ const (
 // Mainly similar to multiple cases of `time.After(func(){})“, but without using goroutines under the hood for each
 // invocation of Enqueue.
 type backoffHeap struct {
-	Ttlheap[*dialWithBackoff]
+	internal.Ttlheap[*dialWithBackoff]
+
 	alreadyInHeap   map[string]bool
 	attemptsPerPeer map[string]uint64 // on successful dial, reset to 0.
 }
@@ -85,7 +88,7 @@ func (d *backoffHeap) ResetAttempts(hostname string) {
 
 func newBackoffHeap() backoffHeap {
 	b := backoffHeap{
-		Ttlheap: newTtlHeap[*dialWithBackoff](),
+		Ttlheap: internal.NewTtlHeap[*dialWithBackoff](),
 
 		alreadyInHeap:   map[string]bool{},
 		attemptsPerPeer: map[string]uint64{},

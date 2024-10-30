@@ -1,4 +1,4 @@
-package comm
+package internal
 
 import (
 	"container/heap"
@@ -70,7 +70,7 @@ func (t *ttlHeap[T]) WaitOnTimer() <-chan time.Time {
 	return t.timer.C
 }
 
-func newTtlHeap[T HasTTL]() Ttlheap[T] {
+func NewTtlHeap[T HasTTL]() Ttlheap[T] {
 	t := &ttlHeap[T]{
 		theap: timedHeap[T]{},
 		timer: time.NewTimer(time.Second), // safe creation of timer. we'll drain it soon.
