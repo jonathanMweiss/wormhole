@@ -454,7 +454,10 @@ func TestBadInputs(t *testing.T) {
 
 		tmp = engines2[1]
 		tmp.started.Store(started)
-		tmp.fp = nil
+		tmp.ftFullParty.FullParty = nil
+		a.ErrorContains(tmp.BeginAsyncThresholdSigningProtocol(nil), "not set up correctly")
+
+		tmp.ftFullParty = nil
 		a.ErrorContains(tmp.BeginAsyncThresholdSigningProtocol(nil), "not set up correctly")
 
 		a.ErrorContains(e1.BeginAsyncThresholdSigningProtocol(make([]byte, 12)), "length is not 32 bytes")

@@ -14,10 +14,7 @@ import (
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/supervisor"
 	"github.com/certusone/wormhole/node/pkg/tss/internal"
-	ethcommon "github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/yossigi/tss-lib/v2/common"
-	tssutil "github.com/yossigi/tss-lib/v2/ecdsa/ethereum"
 	"github.com/yossigi/tss-lib/v2/ecdsa/keygen"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/tss"
@@ -33,11 +30,12 @@ type uuid digest // distinguishing between types to avoid confusion.
 type Engine struct {
 	ctx context.Context
 
-	logger *zap.Logger
-	GuardianStorage
+	logger          *zap.Logger
+	GuardianStorage // TODO: consider renaming to TssSecrets.
+	*ftFullParty    // embedded since the engine is in part - an ftInvestigator.
 
 	fpParams *party.Parameters
-	fp       party.FullParty
+	// fp       party.FullParty
 
 	fpOutChan      chan tss.Message
 	fpSigOutChan   chan *common.SignatureData // output inspected in fpListener.
@@ -199,7 +197,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		return errTssEngineNotStarted
 	}
 
-	if t.fp == nil {
+	if !t.ftFullParty.isSet() {
 		return fmt.Errorf("tss engine is not set up correctly, use NewReliableTSS to create a new engine")
 	}
 
@@ -216,17 +214,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	d := party.Digest{}
 	copy(d[:], vaaDigest)
 
-	err := t.fp.AsyncRequestNewSignature(d)
-	if err == nil {
-		inProgressSigs.Inc()
-		return nil
-	}
-
-	if err == party.ErrNotInSigningCommittee { // no need to return error in this case.
-		return nil
-	}
-
-	return err
+	return t.ftFullParty.NewSignature(d)
 }
 
 func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
@@ -263,8 +251,9 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		logger:          &zap.Logger{},
 		GuardianStorage: *storage,
 
-		fpParams:  fpParams,
-		fp:        fp,
+		fpParams:    fpParams,
+		ftFullParty: newFtFullParty(fp),
+
 		fpOutChan: make(chan tss.Message),
 		fpSigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures*
 			(numBroadcastsPerSignature+numUnicastsRounds*storage.Threshold)),
@@ -297,7 +286,7 @@ func (t *Engine) Start(ctx context.Context) error {
 	t.ctx = ctx
 	t.logger = supervisor.Logger(ctx)
 
-	if err := t.fp.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
+	if err := t.ftFullParty.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
 		t.started.Store(notStarted)
 
 		return err
@@ -312,18 +301,6 @@ func (t *Engine) Start(ctx context.Context) error {
 	)
 
 	return nil
-}
-
-func (t *Engine) GetPublicKey() *ecdsa.PublicKey {
-	return t.fp.GetPublic()
-}
-
-func (t *Engine) GetEthAddress() ethcommon.Address {
-	pubkey := t.fp.GetPublic()
-	ethAddBytes := ethcommon.LeftPadBytes(
-		crypto.Keccak256(tssutil.EcdsaPublicKeyToBytes(pubkey)[1:])[12:], 32)
-
-	return ethcommon.BytesToAddress(ethAddBytes)
 }
 
 // fpListener serves as a listining loop for the full party outputs.
@@ -346,7 +323,7 @@ func (t *Engine) fpListener() {
 				zap.String("guardian", t.GuardianStorage.Self.Id),
 			)
 
-			t.fp.Stop()
+			t.ftFullParty.Stop()
 			cleanUpTicker.Stop()
 
 			return
@@ -618,7 +595,7 @@ func (t *Engine) feedIncomingToFp(parsed tss.ParsedMessage) error {
 	maxLiveSignatures := t.GuardianStorage.MaxSimultaneousSignatures
 
 	if ok := t.sigCounter.add(trackId, from, maxLiveSignatures); ok {
-		return t.fp.Update(parsed)
+		return t.ftFullParty.Update(parsed)
 	}
 
 	tooManySignersErrCntr.Inc()
