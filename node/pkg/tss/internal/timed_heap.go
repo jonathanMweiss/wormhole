@@ -12,6 +12,7 @@ type HasTTL interface {
 type Ttlheap[T HasTTL] interface {
 	Enqueue(T)
 	Dequeue() T
+	// If the heap is not empty, this will fire once per element in the queue according to their time.
 	WaitOnTimer() <-chan time.Time
 
 	Peek() T
@@ -52,6 +53,7 @@ func (t *ttlHeap[T]) setTopAsTimer() {
 	t.stopAndDrainTimer()
 	// endtime.Sub(time.Now()) uses monotonic clock.
 
+	// Notice that if timer.Reset is called with time.Until(endTime) which is negative, it will immediately fire (which is what we want).
 	t.timer.Reset(time.Until(endTime))
 }
 
