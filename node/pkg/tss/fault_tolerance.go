@@ -1,83 +1,46 @@
 package tss
 
 import (
-	"crypto/ecdsa"
 	"sync"
 	"time"
 
+	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/tss/internal"
-	ethcommon "github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
-	tssutil "github.com/yossigi/tss-lib/v2/ecdsa/ethereum"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/tss"
 )
 
 type trackidStr string
-
-// ftInvestigator is responsible for tracking the state of signatures, and whether some guardian is not participating in the protocol.
-type ftFullParty struct {
-	sigStates map[trackidStr]*signatureState
-	ttlheap   internal.Ttlheap[*signatureState]
-
-	// used by the follower to inform the FP with changes required.
-	party.FullParty
+type Problem struct {
+	idWithIssue *tsscommv1.PartyId
+	hadntSeen   []byte // trackid
 }
 
-func newFtFullParty(fp party.FullParty) *ftFullParty {
-	return &ftFullParty{
-		sigStates: make(map[trackidStr]*signatureState),
-		ttlheap:   internal.NewTtlHeap[*signatureState](),
-		FullParty: fp,
-	}
-}
-
-func (f *ftFullParty) isSet() bool {
-	return f != nil && f.FullParty != nil && f.sigStates != nil && f.ttlheap != nil
-}
-
-func (f *ftFullParty) GetPublicKey() *ecdsa.PublicKey {
-	return f.FullParty.GetPublic()
-}
-
-func (f *ftFullParty) GetEthAddress() ethcommon.Address {
-	pubkey := f.FullParty.GetPublic()
-	ethAddBytes := ethcommon.LeftPadBytes(
-		crypto.Keccak256(tssutil.EcdsaPublicKeyToBytes(pubkey)[1:])[12:], 32)
-
-	return ethcommon.BytesToAddress(ethAddBytes)
-}
-
-func (f *ftFullParty) NewSignature(d party.Digest) error {
-	err := f.FullParty.AsyncRequestNewSignature(d)
-	// TODO: start following this signature state!
-
-	if err == party.ErrNotInSigningCommittee { // no need to return error in this case.
-		return nil
-	}
-
-	// TODO: we might need another gauge counter: allSigsInProgress (not affected by ErrNotInSigningCommittee)
-	inProgressSigs.Inc()
-
-	return nil
-}
+// Fault tolerance:
+// We adopt a straightforward approach to handle “semi-omission” failures (for availability reasons only, we assume honest but delayed behavior: nodes that haven’t upgraded their binaries to match the most recent code may not receive new blocks or transactions):
+// A node assumes that if f+1 begins signing, but it hasn’t received any new blocks or transactions yet, it will temporarily stop signing.
+//
+// The logic behind this assumption is as follows:
+// Since I observed that f+1 joined the protocol to sign, I must have at least one honest server who has seen the block and the signature, but I haven’t.
+// This implies that I am delayed, and I should temporarily remove myself from the committees for some time.
 
 // this signature structs are held by two different data structures.
 // 1. a map so we can access and update these easily.
 // 2. a heap to keep track of the ttl of each signature.
 //
-// Once the timer of the heap pops, we checkw whether rounds advanced since last ttl update, if so, insert back to heap with new ttl.
-// if not, tell the FP to change the committee (remove the guardian that didn't manage to deliver the message).
+// Once the timer of the heap pops, we check the state of the signature and decide what to do (change comitte members, etc).
 type signatureState struct {
 	mtx     sync.Mutex
+	digest  party.Digest
 	trackid []byte
 
-	signingCommittee []*tss.PartyID
+	startedSigning bool
 
-	// updated before feeding the FP with this value.
-	delivered    [numBroadcastsPerSignature][]*tss.PartyID
-	sawUnicasts  [numUnicastsRounds][]*tss.PartyID // TODO.
-	currentRound int                               // starts with 1 and advances to 9.
+	signingCommittee []*tss.PartyID
+	failingServers   []*tss.PartyID // Any delivery failure witnessed is collected here.
+
+	// the following field is updated before feeding the FP with this value.
+	sawUnicastsFrom []*tss.PartyID // TODO.
 
 	EndTime time.Time // set x seconds, once timer pops, check if advanced to next round.
 	// if something wasn't delivered from some guardian -> Remove this guardian from committee.
@@ -93,8 +56,43 @@ func (s *signatureState) GetEndTime() time.Time {
 	return endtime
 }
 
-func (s *signatureState) addToEndTime(t time.Duration) {
-	s.mtx.Lock()
-	s.EndTime = s.EndTime.Add(t)
-	s.mtx.Unlock()
+// a single threaded env, that inspects incoming signatures request, message deliveries etc.
+func (t *Engine) tracker() {
+	var alertHeap = internal.NewTtlHeap[*signatureState]()
+	// var sigsStates = map[trackidStr]*signatureState{}
+
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+
+		// case tsmsg := <-t.deliveryTrackChan:
+		// 	// TODO:
+		case <-alertHeap.WaitOnTimer():
+			sigState := alertHeap.Dequeue()
+
+			sigState.mtx.Lock()
+			if sigState.startedSigning {
+				sigState.mtx.Unlock()
+				continue
+			}
+
+			// At least one honest guardian saw the message, but I didn't (I'm probablt behined the network).
+			if len(sigState.sawUnicastsFrom) >= t.GuardianStorage.getMaxExpectedFaults()+1 {
+				sigState.mtx.Unlock()
+				t.tellProblem <- Problem{
+					idWithIssue: partyIdToProto(t.Self),
+					hadntSeen:   sigState.trackid,
+				}
+
+				continue
+			}
+
+			// I haven't seen the message, but I'm not certain I'm behind the network.
+			// increasing timeout for this signature.
+			sigState.EndTime = time.Now().Add(time.Second * 5)
+			alertHeap.Enqueue(sigState)
+			sigState.mtx.Unlock()
+		}
+	}
 }
