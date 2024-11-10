@@ -254,10 +254,10 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		fpParams:    fpParams,
 		ftFullParty: newFtFullParty(fp),
 
-		fpOutChan: make(chan tss.Message),
-		fpSigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures*
+		fpOutChan: make(chan tss.Message, storage.MaxSimultaneousSignatures*
 			(numBroadcastsPerSignature+numUnicastsRounds*storage.Threshold)),
-		sigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
+		fpSigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
+		sigOutChan:   make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
 
 		fpErrChannel:    make(chan *tss.Error),
 		messageOutChan:  make(chan Sendable),
@@ -286,7 +286,7 @@ func (t *Engine) Start(ctx context.Context) error {
 	t.ctx = ctx
 	t.logger = supervisor.Logger(ctx)
 
-	if err := t.ftFullParty.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
+	if err := t.ftFullParty.Start(ctx, t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
 		t.started.Store(notStarted)
 
 		return err
