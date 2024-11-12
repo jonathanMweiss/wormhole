@@ -382,10 +382,7 @@ func (t *Engine) handleFpSignature(sig *common.SignatureData) {
 
 	t.sigCounter.remove(sig.TrackingId)
 
-	select {
-	case <-t.ctx.Done():
-	case t.sigOutChan <- sig:
-	}
+	intoChannelOrDone(t.ctx, t.sigOutChan, sig)
 }
 
 func (t *Engine) handleFpError(err *tss.Error) {
@@ -412,10 +409,7 @@ func (t *Engine) handleFpOutput(m tss.Message) {
 	if err == nil {
 		sentMsgCntr.Inc()
 
-		select {
-		case t.messageOutChan <- tssMsg:
-		case <-t.ctx.Done():
-		}
+		intoChannelOrDone(t.ctx, t.messageOutChan, tssMsg)
 
 		return
 	}
@@ -550,11 +544,7 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 		return fmt.Errorf("failed to clone echo message")
 	}
 
-	select {
-	case <-t.ctx.Done():
-		return t.ctx.Err()
-	case t.messageOutChan <- newEcho(content.Message, t.guardiansProtoIDs):
-	}
+	intoChannelOrDone[Sendable](t.ctx, t.messageOutChan, newEcho(content.Message, t.guardiansProtoIDs))
 
 	return nil
 }

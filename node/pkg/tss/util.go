@@ -1,6 +1,7 @@
 package tss
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -282,5 +283,12 @@ func getRound(m tss.ParsedMessage) (signingRound, error) {
 		return round9Message, nil
 	default:
 		return "", fmt.Errorf("unknown message type")
+	}
+}
+
+func intoChannelOrDone[T any](ctx context.Context, c chan T, v T) {
+	select {
+	case c <- v:
+	case <-ctx.Done():
 	}
 }
