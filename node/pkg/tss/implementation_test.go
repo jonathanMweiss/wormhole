@@ -873,17 +873,13 @@ func TestSigCounter(t *testing.T) {
 
 	t.Run("MaxCountBlockAdditionalUpdates", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
-		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := engines[0]
+		digests := []digest{{1}, {2}}
+		e1 := loadSigningGuardian(a, ctx, digests...)
 
 		e1.MaxSimultaneousSignatures = 1
-
 		e1.Start(ctx)
 
-		d := digest{}
-		copy(d[:], "1"+t.Name())
-
-		msg := beginSigningAndGrabMessage(e1, d)
+		msg := beginSigningAndGrabMessage(e1, digests[0])
 
 		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -891,8 +887,7 @@ func TestSigCounter(t *testing.T) {
 		}))
 
 		// trying to handle a new message for a different signature.
-		copy(d[:], "2"+t.Name())
-		msg = beginSigningAndGrabMessage(e1, d)
+		msg = beginSigningAndGrabMessage(e1, digests[1])
 
 		a.ErrorContains(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -902,16 +897,13 @@ func TestSigCounter(t *testing.T) {
 
 	t.Run("ErrorReduceCount", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
-		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := engines[0]
-
+		digests := []digest{{1}}
+		e1 := loadSigningGuardian(a, ctx, digests...)
 		e1.MaxSimultaneousSignatures = 1
 
 		e1.Start(ctx)
 
-		d := digest{}
-		copy(d[:], "1"+t.Name())
-		msg := beginSigningAndGrabMessage(e1, d)
+		msg := beginSigningAndGrabMessage(e1, digests[0])
 
 		incoming := &IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -939,16 +931,13 @@ func TestSigCounter(t *testing.T) {
 
 	t.Run("sigDoneReduceCount", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
-		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := engines[0]
-
+		digests := []digest{{1}}
+		e1 := loadSigningGuardian(a, ctx, digests...)
 		e1.MaxSimultaneousSignatures = 1
 
 		e1.Start(ctx)
 
-		d := digest{}
-		copy(d[:], "1"+t.Name())
-		msg := beginSigningAndGrabMessage(e1, d)
+		msg := beginSigningAndGrabMessage(e1, digests[0])
 
 		incoming := &IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -975,28 +964,48 @@ func TestSigCounter(t *testing.T) {
 	})
 
 	t.Run("CanHaveSimulSigners", func(t *testing.T) {
-		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := engines[0]
+		digests := []digest{{1}, {2}}
+		e1 := loadSigningGuardian(a, ctx, digests...)
 		e1.MaxSimultaneousSignatures = 2
 
 		e1.Start(ctx)
 
-		d := digest{}
-		copy(d[:], "1"+t.Name())
-		msg := beginSigningAndGrabMessage(e1, d)
+		msg := beginSigningAndGrabMessage(e1, digests[0])
 
 		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
 			Content: msg.GetNetworkMessage(),
 		}))
 
-		copy(d[:], "2"+t.Name())
 		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
-			Content: beginSigningAndGrabMessage(e1, d).GetNetworkMessage(),
+			Content: beginSigningAndGrabMessage(e1, digests[1]).GetNetworkMessage(),
 		}))
 
 	})
+}
+
+func loadSigningGuardian(a *assert.Assertions, ctx context.Context, digests ...digest) *Engine {
+	a.GreaterOrEqual(len(digests), 1) // at least one
+
+	engines := load5GuardiansSetupForBroadcastChecks(a)
+
+mainloop:
+	for _, e := range engines {
+
+		for _, d := range digests {
+			info1, err := e.fp.GetSigningInfo(party.Digest(d), nil)
+			a.NoError(err)
+
+			if !info1.IsSigner {
+				continue mainloop
+			}
+		}
+
+		return e
+	}
+
+	panic("no one is a signer")
 }
 
 func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
@@ -1010,7 +1019,7 @@ func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
 				msg = tmp
 			}
 
-		case <-time.After(time.Second * 2):
+		case <-time.After(time.Second * 5):
 			// This means the signer wasn't one of the signing committees. (did the Guardian storage change?)
 			// if it did, just make sure this engine is expected to sign, else use the right engine in the test.
 			panic("timeout!")

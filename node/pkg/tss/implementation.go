@@ -55,8 +55,7 @@ type Engine struct {
 	sigCounter activeSigCounter
 
 	// used for fault-tolerance:
-	tellProblem       chan Problem
-	deliveryTrackChan chan tss.Message
+	ftChans
 }
 
 type PEM []byte
@@ -88,16 +87,16 @@ type GuardianStorage struct {
 
 	LoadDistributionKey []byte
 
-	// MaxSignerTTL is the maximum time a signer is allowed to be active.
-	// used to release resources.
-	MaxSignerTTL time.Duration
-
 	// data structures to ensure quick lookups:
 	guardiansProtoIDs []*tsscommv1.PartyId
 	guardianToCert    map[string]*x509.Certificate
 	pemkeyToGuardian  map[string]*tss.PartyID
 
 	MaxSimultaneousSignatures int
+	// MaxSignerTTL is the maximum time a signer is allowed to be active.
+	// used to release resources.
+	MaxSignerTTL        time.Duration
+	MaxSigStartWaitTime time.Duration // time to wait for a signature to start before thinking the blockchain node of the guardian is faulty.
 }
 
 func (g *GuardianStorage) contains(pid *tss.PartyID) bool {
@@ -220,15 +219,15 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	d := party.Digest{}
 	copy(d[:], vaaDigest)
 
-	err := t.fp.AsyncRequestNewSignature(d)
-	if err == nil {
-		inProgressSigs.Inc()
-		return nil
+	info, err := t.fp.AsyncRequestNewSignature(d)
+	if err != nil {
+		return err
 	}
 
-	if err == party.ErrNotInSigningCommittee { // no need to return error in this case.
-		return nil
+	if info.IsSigner {
+		inProgressSigs.Inc()
 	}
+	// TODO: inform ftTracker.
 
 	return err
 }
@@ -330,15 +329,19 @@ func (t *Engine) GetEthAddress() ethcommon.Address {
 	return ethcommon.BytesToAddress(ethAddBytes)
 }
 
-// fpListener serves as a listining loop for the full party outputs.
-// ensures the FP isn't being blocked on writing to fpOutChan, and wraps the result into a gossip message.
-func (t *Engine) fpListener() {
+func (st *GuardianStorage) maxSignerTTL() time.Duration {
 	// SECURITY NOTE: when we clean the guardian map from received Echo's
 	// we must use TTL > FullParty.TTL to ensure guardians can't use
 	// the deletion time to perform equivication attacks (since a message
 	// has no record after it was deleted).
 	// *2 is to account for possible offset in the time of the guardian.
-	maxTTL := t.GuardianStorage.MaxSignerTTL * 2
+	return st.MaxSignerTTL * 2
+}
+
+// fpListener serves as a listining loop for the full party outputs.
+// ensures the FP isn't being blocked on writing to fpOutChan, and wraps the result into a gossip message.
+func (t *Engine) fpListener() {
+	maxTTL := t.GuardianStorage.maxSignerTTL()
 
 	cleanUpTicker := time.NewTicker(maxTTL)
 
