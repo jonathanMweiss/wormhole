@@ -8,6 +8,7 @@ import (
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/tss"
+	"go.uber.org/zap"
 )
 
 // Fault tolerance:
@@ -19,16 +20,26 @@ import (
 // This implies that I am delayed, and I should temporarily remove myself from the committees for some time.
 
 type trackidStr string
-type isFtTrackerCmd interface{ isCmd() }
+type isFtTrackerCmd interface {
+	// TODO: consider applyCmd(*Engine, *ftTracker) instead of this.
+	isCmd() // marker interface
+}
 
 type signCommand struct {
-	party.Digest
-	vaa.ChainID
-	party.SigningInfo
+	Digest      party.Digest
+	ChainID     vaa.ChainID
+	SigningInfo party.SigningInfo
 }
 
 // supporting the isFtTrackerCmd interface
 func (s signCommand) isCmd() {}
+
+type sigDoneCommand struct {
+	Digest  party.Digest
+	trackId []byte
+}
+
+func (s sigDoneCommand) isCmd() {}
 
 type deliveryCommand struct {
 	tss.Message
@@ -64,15 +75,15 @@ type Problem struct {
 //
 // Once the timer of the heap pops, we check the state of the signature and decide what to do (change comitte members, etc).
 type signatureState struct {
-	digest   *party.Digest // nil if not seen yet.
-	trackids [][]byte      // there might be multiple trackids for a single digest (due to multiple faults).
-	chain    vaa.ChainID   // blockchain the message relates to (e.g. Ethereum, Solana, etc).
+	digest   *party.Digest   // nil if not seen yet.
+	trackids map[string]bool // there might be multiple trackids for a single digest (due to multiple faults).
+	chain    vaa.ChainID     // blockchain the message relates to (e.g. Ethereum, Solana, etc).
 
 	startedSigning bool
 
-	signingCommittee []*tss.PartyID // without faults.
+	signingComittee []*tss.PartyID // without faults.
 
-	sawProtocolMessagesFrom []*tsscommv1.PartyId // TODO.
+	sawProtocolMessagesFrom map[strPartyId]bool // TODO.
 
 	alertTime time.Time
 
@@ -86,9 +97,8 @@ func (s *signatureState) GetEndTime() time.Time {
 
 // Describes a specfic party's data in terms of fault tolerance.
 type ftPartyData struct {
-	faultsOn       []vaa.ChainID             // chains that this party has faults on.
-	timeToRevive   map[vaa.ChainID]time.Time // the time this party is expected to come back and be part of the protocol again.
-	sigsItFaultsOn map[trackidStr]*signatureState
+	timeToRevive map[vaa.ChainID]time.Time // the time this party is expected to come back and be part of the protocol again.
+	sigsUnderway map[trackidStr]*signatureState
 }
 
 type ftTracker struct {
@@ -125,10 +135,62 @@ func (f *ftTracker) applyCommand(t *Engine, cmd isFtTrackerCmd) {
 		f.applySignCommand(t, c)
 	case deliveryCommand:
 		f.applyDeliveryCommand(t, c)
+	default:
+		t.logger.Error("received unknown command type", zap.Any("cmd", cmd))
 	}
 }
 
-func (f *ftTracker) applySignCommand(t *Engine, c signCommand) {
+func (f *ftTracker) applySignCommand(t *Engine, cmd signCommand) {
+	sigState, ok := f.sigsState[trackidStr(cmd.SigningInfo.TrackingID[:])]
+	// TODO: Think how to handle all incoming trackid which are tied specifically to this digest.
+	if !ok {
+		sigState = &signatureState{
+			chain: cmd.ChainID,
+
+			startedSigning: true,
+
+			alertTime: time.Time{}, // No alert time
+			beginTime: time.Now(),
+		}
+		f.sigsState[trackidStr(cmd.Digest[:])] = sigState
+	}
+
+	cpy := party.Digest{}
+	copy(cpy[:], cmd.Digest[:])
+	sigState.digest = &cpy
+
+	sigState.trackids[string(cmd.Digest[:])] = true
+	sigState.trackids[string(cmd.SigningInfo.TrackingID)] = true
+
+	sigState.chain = cmd.ChainID
+
+	sigInfo := cmd.SigningInfo
+
+	// check if we need to ammend the committee due to known faulties.
+	faultiesInCurrentComittee := []*tss.PartyID{}
+	for _, pid := range cmd.SigningInfo.SigningCommittee {
+		m := f.membersData[strPartyId(partyIdToString(pid))]
+		if m.timeToRevive[cmd.ChainID].After(time.Now()) { // TODO: see how to support overlapping case.
+			faultiesInCurrentComittee = append(faultiesInCurrentComittee, pid)
+		}
+	}
+
+	if len(faultiesInCurrentComittee) >= 0 {
+		newSigningInfo, err := t.fp.RemovePariticipantsFromSigning(cmd.Digest, faultiesInCurrentComittee)
+		if err != nil {
+			// TODO: should we inform error and tell others to stop relying on this guardian?
+			panic("not implemented yet")
+		}
+
+		sigInfo = newSigningInfo.NewSigningInfo
+	}
+
+	// store for each party the sigs it is responsible for.
+	// thus on failure, we can find what sigs they should be removed from.
+	for _, pid := range sigInfo.SigningCommittee {
+		strPid := strPartyId(partyIdToString(pid))
+		f.membersData[strPid].sigsUnderway[trackidStr(cmd.SigningInfo.TrackingID[:])] = sigState
+	}
 }
 
 func (f *ftTracker) applyDeliveryCommand(t *Engine, c deliveryCommand) {}
