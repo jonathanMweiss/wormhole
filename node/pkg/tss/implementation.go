@@ -227,7 +227,12 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	if info.IsSigner {
 		inProgressSigs.Inc()
 	}
-	// TODO: inform ftTracker.
+
+	intoChannelOrDone[isFtTrackerCmd](t.ctx, t.ftChans.tellCmd, &signCommand{
+		Digest:      d,
+		ChainID:     0, // TODO
+		SigningInfo: info,
+	})
 
 	return err
 }
@@ -282,6 +287,11 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		started: atomic.Uint32{}, // default value is 0
 
 		sigCounter: newSigCounter(),
+
+		ftChans: ftChans{
+			tellCmd:     make(chan isFtTrackerCmd),
+			tellProblem: make(chan Problem),
+		},
 	}
 
 	return t, nil
@@ -308,6 +318,8 @@ func (t *Engine) Start(ctx context.Context) error {
 
 	// closing the t.fp.start inside th listener
 	go t.fpListener()
+
+	go t.ftTracker()
 
 	t.logger.Info(
 		"tss engine started",

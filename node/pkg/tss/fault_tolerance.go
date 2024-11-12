@@ -28,25 +28,26 @@ type isFtTrackerCmd interface {
 type signCommand struct {
 	Digest      party.Digest
 	ChainID     vaa.ChainID
-	SigningInfo party.SigningInfo
+	SigningInfo *party.SigningInfo
 }
 
 // supporting the isFtTrackerCmd interface
-func (s signCommand) isCmd() {}
+func (s *signCommand) isCmd() {}
 
 type sigDoneCommand struct {
 	Digest  party.Digest
 	trackId []byte
 }
 
-func (s sigDoneCommand) isCmd() {}
+func (s *sigDoneCommand) isCmd() {}
 
 type deliveryCommand struct {
-	tss.Message
+	parsedMsg tss.Message
+	from      *tss.PartyID
 }
 
 // supporting the isFtTrackerCmd interface
-func (d deliveryCommand) isCmd() {}
+func (d *deliveryCommand) isCmd() {}
 
 type ftChans struct {
 	tellCmd chan isFtTrackerCmd
@@ -57,7 +58,7 @@ type ftChans struct {
 type Problem struct {
 	idWithIssue *tsscommv1.PartyId
 	// hadntSeenTrackId []byte      // trackid
-	blockchainInfo vaa.ChainID // what chain this problem is related to.
+	blockchainID vaa.ChainID // what chain this problem is related to.
 
 	relenquishTime     time.Time
 	relenquishDuration time.Duration
@@ -75,11 +76,11 @@ type Problem struct {
 //
 // Once the timer of the heap pops, we check the state of the signature and decide what to do (change comitte members, etc).
 type signatureState struct {
-	digest   *party.Digest   // nil if not seen yet.
-	trackids map[string]bool // there might be multiple trackids for a single digest (due to multiple faults).
-	chain    vaa.ChainID     // blockchain the message relates to (e.g. Ethereum, Solana, etc).
+	digest   *party.Digest       // nil if not seen yet.
+	trackids map[trackidStr]bool // there might be multiple trackids for a single digest (due to multiple faults).
+	chain    vaa.ChainID         // blockchain the message relates to (e.g. Ethereum, Solana, etc).
 
-	startedSigning bool
+	approvedToSign bool
 
 	signingComittee []*tss.PartyID // without faults.
 
@@ -97,8 +98,8 @@ func (s *signatureState) GetEndTime() time.Time {
 
 // Describes a specfic party's data in terms of fault tolerance.
 type ftPartyData struct {
-	timeToRevive map[vaa.ChainID]time.Time // the time this party is expected to come back and be part of the protocol again.
-	sigsUnderway map[trackidStr]*signatureState
+	timeToRevive       map[vaa.ChainID]time.Time // the time this party is expected to come back and be part of the protocol again.
+	sigsUnderThisParty map[trackidStr]*signatureState
 }
 
 type ftTracker struct {
@@ -110,11 +111,19 @@ type ftTracker struct {
 }
 
 // a single threaded env, that inspects incoming signatures request, message deliveries etc.
-func (t *Engine) tracker() {
+func (t *Engine) ftTracker() {
 	f := &ftTracker{
 		sigAlerts:   internal.NewTtlHeap[*signatureState](),
 		sigsState:   make(map[trackidStr]*signatureState),
 		membersData: make(map[strPartyId]ftPartyData),
+	}
+
+	for _, pid := range t.GuardianStorage.Guardians {
+		strPid := strPartyId(partyIdToString(pid))
+		f.membersData[strPid] = ftPartyData{
+			timeToRevive:       map[vaa.ChainID]time.Time{},
+			sigsUnderThisParty: map[trackidStr]*signatureState{},
+		}
 	}
 
 	for {
@@ -131,36 +140,41 @@ func (t *Engine) tracker() {
 
 func (f *ftTracker) applyCommand(t *Engine, cmd isFtTrackerCmd) {
 	switch c := cmd.(type) {
-	case signCommand:
+	case *signCommand:
 		f.applySignCommand(t, c)
-	case deliveryCommand:
+	case *deliveryCommand:
 		f.applyDeliveryCommand(t, c)
 	default:
 		t.logger.Error("received unknown command type", zap.Any("cmd", cmd))
 	}
 }
 
-func (f *ftTracker) applySignCommand(t *Engine, cmd signCommand) {
+func (f *ftTracker) applySignCommand(t *Engine, cmd *signCommand) {
 	sigState, ok := f.sigsState[trackidStr(cmd.SigningInfo.TrackingID[:])]
 	// TODO: Think how to handle all incoming trackid which are tied specifically to this digest.
 	if !ok {
 		sigState = &signatureState{
-			chain: cmd.ChainID,
+			digest:   nil,
+			trackids: map[trackidStr]bool{},
+			chain:    cmd.ChainID,
 
-			startedSigning: true,
-
-			alertTime: time.Time{}, // No alert time
-			beginTime: time.Now(),
+			signingComittee:         []*tss.PartyID{},
+			sawProtocolMessagesFrom: map[strPartyId]bool{},
+			alertTime:               time.Time{},
+			beginTime:               time.Now(),
 		}
+
 		f.sigsState[trackidStr(cmd.Digest[:])] = sigState
 	}
+
+	sigState.approvedToSign = true
 
 	cpy := party.Digest{}
 	copy(cpy[:], cmd.Digest[:])
 	sigState.digest = &cpy
 
-	sigState.trackids[string(cmd.Digest[:])] = true
-	sigState.trackids[string(cmd.SigningInfo.TrackingID)] = true
+	sigState.trackids[trackidStr(cmd.Digest[:])] = true
+	sigState.trackids[trackidStr(cmd.SigningInfo.TrackingID)] = true
 
 	sigState.chain = cmd.ChainID
 
@@ -176,42 +190,65 @@ func (f *ftTracker) applySignCommand(t *Engine, cmd signCommand) {
 	}
 
 	if len(faultiesInCurrentComittee) >= 0 {
+		// todo: ensure that we remove this sig from responsibility of the faulties (in case they already started signing).
 		newSigningInfo, err := t.fp.RemovePariticipantsFromSigning(cmd.Digest, faultiesInCurrentComittee)
 		if err != nil {
 			// TODO: should we inform error and tell others to stop relying on this guardian?
 			panic("not implemented yet")
 		}
 
-		sigInfo = newSigningInfo.NewSigningInfo
+		sigInfo = &newSigningInfo.NewSigningInfo
 	}
 
 	// store for each party the sigs it is responsible for.
 	// thus on failure, we can find what sigs they should be removed from.
 	for _, pid := range sigInfo.SigningCommittee {
 		strPid := strPartyId(partyIdToString(pid))
-		f.membersData[strPid].sigsUnderway[trackidStr(cmd.SigningInfo.TrackingID[:])] = sigState
+		f.membersData[strPid].sigsUnderThisParty[trackidStr(cmd.SigningInfo.TrackingID[:])] = sigState
 	}
 }
 
-func (f *ftTracker) applyDeliveryCommand(t *Engine, c deliveryCommand) {}
+func (f *ftTracker) applyDeliveryCommand(t *Engine, cmd *deliveryCommand) {
+	// strTrackid := trackidStr(cmd.parsedMsg.WireMsg().TrackingID)
+	// sigState, ok := f.sigsState[strTrackid]
+	// if !ok {
+	// 	sigState = &signatureState{
+	// 		digest:                  nil, // unknown for now. TODO: consider adding to the message fields.
+	// 		trackids:                map[trackidStr]bool{},
+	// 		chain:                   -1, // unknown for now. (TODO: add fields to tss message to find the chain out)
+	// 		approvedToSign:          false,
+	// 		signingComittee:         []*tss.PartyID{}, // unknown for now.
+	// 		sawProtocolMessagesFrom: map[strPartyId]bool{},
+	// 		alertTime:               time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
+	// 		beginTime:               time.Now(),
+	// 	}
+	// 	f.sigsState[strTrackid] = sigState
+	// }
+
+	// sigState.trackids[strTrackid] = true
+
+	// sigState.sawProtocolMessagesFrom[strPartyId(partyIdToString(cmd.from))] = true
+
+	// // sigState.
+
+}
 
 func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 	sigState := f.sigAlerts.Dequeue()
 
-	if sigState.startedSigning {
+	if sigState.approvedToSign {
 		return
 	}
 
 	// At least one honest guardian saw the message, but I didn't (I'm probablt behined the network).
 	if len(sigState.sawProtocolMessagesFrom) >= t.GuardianStorage.getMaxExpectedFaults()+1 {
-
-		select {
-		case t.tellProblem <- Problem{
-			idWithIssue: partyIdToProto(t.Self),
-			// hadntSeenTrackId: sigState.trackid,
-		}:
-		case <-t.ctx.Done():
-		}
+		intoChannelOrDone(t.ctx, t.ftChans.tellProblem, Problem{
+			idWithIssue:        partyIdToProto(t.Self),
+			blockchainID:       sigState.chain,
+			relenquishTime:     time.Now(),
+			relenquishDuration: time.Minute * 10,
+			signature:          []byte{}, // TODO
+		})
 
 		return
 	}
