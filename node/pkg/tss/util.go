@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
+	"github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
 	"go.uber.org/zap"
@@ -13,7 +14,7 @@ import (
 
 type logableError struct {
 	cause      error
-	trackingId []byte
+	trackingId *common.TrackingID
 	round      signingRound
 }
 
@@ -49,12 +50,12 @@ func idToString(id *tss.PartyID) strPartyId {
 
 // Add adds a guardian to the counter for a given digest.
 // returns false if this guardian is active for too many signatures ( > maxActiveSignaturesPerGuardian).
-func (c *activeSigCounter) add(d []byte, guardian *tss.PartyID, maxActiveSignaturesPerGuardian int) bool {
+func (c *activeSigCounter) add(trackId *common.TrackingID, guardian *tss.PartyID, maxActiveSignaturesPerGuardian int) bool {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	if _, ok := c.digestToGuardians[strDigest(d)]; !ok {
-		c.digestToGuardians[strDigest(d)] = make(set[strPartyId])
+	if _, ok := c.digestToGuardians[strDigest(trackId.Digest)]; !ok {
+		c.digestToGuardians[strDigest(trackId.Digest)] = make(set[strPartyId])
 	}
 
 	strPartyId := idToString(guardian)
@@ -64,7 +65,7 @@ func (c *activeSigCounter) add(d []byte, guardian *tss.PartyID, maxActiveSignatu
 	}
 
 	// if already an active signature for this guardian, then it doesn't count as an additional signature
-	if _, ok := c.guardianToDigests[strPartyId][strDigest(d)]; ok {
+	if _, ok := c.guardianToDigests[strPartyId][strDigest(trackId.Digest)]; ok {
 		return true
 	}
 
@@ -73,21 +74,21 @@ func (c *activeSigCounter) add(d []byte, guardian *tss.PartyID, maxActiveSignatu
 		return false
 	}
 
-	c.digestToGuardians[strDigest(d)][strPartyId] = struct{}{}
-	c.guardianToDigests[strPartyId][strDigest(d)] = struct{}{}
+	c.digestToGuardians[strDigest(trackId.Digest)][strPartyId] = struct{}{}
+	c.guardianToDigests[strPartyId][strDigest(trackId.Digest)] = struct{}{}
 
 	return true
 }
 
-func (c *activeSigCounter) remove(d []byte) {
+func (c *activeSigCounter) remove(trackid *common.TrackingID) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	guardians := c.digestToGuardians[strDigest(d)]
-	delete(c.digestToGuardians, strDigest(d))
+	guardians := c.digestToGuardians[strDigest(trackid.Digest)]
+	delete(c.digestToGuardians, strDigest(trackid.Digest))
 
 	for g := range guardians {
-		delete(c.guardianToDigests[g], strDigest(d))
+		delete(c.guardianToDigests[g], strDigest(trackid.Digest))
 	}
 }
 

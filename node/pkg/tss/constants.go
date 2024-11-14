@@ -1,6 +1,10 @@
 package tss
 
-import "time"
+import (
+	"time"
+
+	"github.com/yossigi/tss-lib/v2/ecdsa/party"
+)
 
 const (
 	digestSize = 32
@@ -11,8 +15,14 @@ const (
 	// byte sizes
 	hostnameSize     = 255
 	pemKeySize       = 178
-	trackingIDSize   = 32
 	signingRoundSize = 8
+
+	// auxiliaryData is emmiterchain + chainID in bytes.
+	auxiliaryDataSize = 4 + 4
+	maxParties        = 256
+	// trackindID = digest + auxiliaryData + bitmap of all parties
+	// 3 bytes for '-' between each field.
+	trackingIDSize = party.DigestSize + (maxParties / 8) + auxiliaryDataSize + 3
 
 	defaultMaxLiveSignatures = 1000
 

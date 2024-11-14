@@ -219,7 +219,10 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	d := party.Digest{}
 	copy(d[:], vaaDigest)
 
-	info, err := t.fp.AsyncRequestNewSignature(d)
+	info, err := t.fp.AsyncRequestNewSignature(party.SigningTask{
+		Digest: d,
+		// TODO
+	})
 	if err != nil {
 		return err
 	}
@@ -227,12 +230,6 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	if info.IsSigner {
 		inProgressSigs.Inc()
 	}
-
-	intoChannelOrDone[isFtTrackerCmd](t.ctx, t.ftChans.tellCmd, &signCommand{
-		Digest:      d,
-		ChainID:     0, // TODO
-		SigningInfo: info,
-	})
 
 	return err
 }
@@ -759,7 +756,7 @@ func (t *Engine) getMessageUUID(msg tss.ParsedMessage) (uuid, error) {
 	// The TackingID of a parsed message is tied to the run of the protocol for a single
 	//  signature, thus we use it as a sessionID.
 	messageTrackingID := [trackingIDSize]byte{}
-	copy(messageTrackingID[:], msg.WireMsg().GetTrackingID())
+	copy(messageTrackingID[:], []byte(msg.WireMsg().GetTrackingID().ToString()))
 
 	fromId := [hostnameSize]byte{}
 	copy(fromId[:], msg.GetFrom().Id)

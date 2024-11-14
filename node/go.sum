@@ -3170,6 +3170,8 @@ github.com/yossigi/tss-lib/v2 v2.0.0-20241105105752-ba0d841a5de6 h1:i2h+5sNvqpXy
 github.com/yossigi/tss-lib/v2 v2.0.0-20241105105752-ba0d841a5de6/go.mod h1:tRbsNURoGxPr5M7II37bTIEhdErLKo16a6Un6i7Bxwg=
 github.com/yossigi/tss-lib/v2 v2.0.0-20241111100411-f1ee63d7445d h1:lQn2z+GfZIiDjZkrgY7SY/oZseY5s9B+mkKs3QQHp+s=
 github.com/yossigi/tss-lib/v2 v2.0.0-20241111100411-f1ee63d7445d/go.mod h1:tRbsNURoGxPr5M7II37bTIEhdErLKo16a6Un6i7Bxwg=
+github.com/yossigi/tss-lib/v2 v2.0.0-20241114083836-08224c13a797 h1:eHrywvcXZ+enbytQNisIthO4YfajIbZ/qcSFUn8H0CI=
+github.com/yossigi/tss-lib/v2 v2.0.0-20241114083836-08224c13a797/go.mod h1:tRbsNURoGxPr5M7II37bTIEhdErLKo16a6Un6i7Bxwg=
 github.com/youmark/pkcs8 v0.0.0-20181117223130-1be2e3e5546d/go.mod h1:rHwXgn7JulP+udvsHwJoVG1YGAP6VLg4y9I5dyZdqmA=
 github.com/yudai/gojsondiff v1.0.0/go.mod h1:AY32+k2cwILAkW1fbgxQ5mUmMiZFgLIV+FBNExI05xg=
 github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82/go.mod h1:lgjkn3NuSvDfVJdfcVVdX+jpBxNmX4rDAzaS45IcYoM=

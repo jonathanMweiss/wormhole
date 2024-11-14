@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
+	"github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/tss"
 )
 
@@ -18,7 +19,7 @@ type broadcaststate struct {
 	// The following three fields should not be changed after creation of broadcaststate:
 	timeReceived  time.Time
 	messageDigest digest
-	trackingId    []byte
+	trackingId    *common.TrackingID
 
 	votes map[voterId]bool
 	// if set to true: don't echo again, even if received from original sender.

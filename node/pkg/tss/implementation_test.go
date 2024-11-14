@@ -492,11 +492,20 @@ func TestCleanup(t *testing.T) {
 	engines := load5GuardiansSetupForBroadcastChecks(a)
 	e1 := engines[0]
 
-	e1.received[uuid{1}] = &broadcaststate{
+	uuid1 := uuid{1}
+	e1.received[uuid1] = &broadcaststate{
 		timeReceived: time.Now().Add(time.Minute * 10 * (-1)),
+		trackingId: &tsscommon.TrackingID{
+			Digest: uuid1[:],
+		},
 	}
-	e1.received[uuid{2}] = &broadcaststate{
+
+	uuid2 := uuid{2}
+	e1.received[uuid2] = &broadcaststate{
 		timeReceived: time.Now(),
+		trackingId: &tsscommon.TrackingID{
+			Digest: uuid2[:],
+		},
 	}
 
 	e1.cleanup(time.Minute * 5) // if more than 5 minutes passed -> delete
@@ -539,7 +548,7 @@ func TestRouteCheck(t *testing.T) {
 
 	e1.Start(testutils.MakeSupervisorContext(ctx))
 	e1.fpOutChan <- &badtssMessage{}
-	e1.fpErrChannel <- tss.NewTrackableError(errors.New("test"), "test", -1, nil, make([]byte, 32))
+	e1.fpErrChannel <- tss.NewTrackableError(errors.New("test"), "test", -1, nil, &tsscommon.TrackingID{})
 	e1.fpErrChannel <- nil
 
 	time.Sleep(time.Millisecond * 200)
@@ -672,8 +681,11 @@ func TestMessagesWithBadRounds(t *testing.T) {
 
 // if to == nil it's a broadcast message.
 func generateFakeMessageWithRandomContent(from, to *tss.PartyID, rnd signingRound, digest party.Digest) tss.ParsedMessage {
-	trackingId := &big.Int{}
-	trackingId.SetBytes(digest[:])
+	trackingId := &tsscommon.TrackingID{
+		Digest:       digest[:],
+		PartiesState: []byte{},
+		AuxilaryData: []byte{},
+	}
 
 	rndmBigNumber := &big.Int{}
 	buf := make([]byte, 16)
@@ -718,7 +730,7 @@ func generateFakeMessageWithRandomContent(from, to *tss.PartyID, rnd signingRoun
 		panic("unknown round")
 	}
 
-	return tss.NewMessage(meta, content, tss.NewMessageWrapper(meta, content, trackingId.Bytes()...))
+	return tss.NewMessage(meta, content, tss.NewMessageWrapper(meta, content, trackingId))
 }
 
 func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
@@ -994,7 +1006,10 @@ mainloop:
 	for _, e := range engines {
 
 		for _, d := range digests {
-			info1, err := e.fp.GetSigningInfo(party.Digest(d), nil)
+			st := party.SigningTask{}
+			copy(st.Digest[:], d[:])
+
+			info1, err := e.fp.GetSigningInfo(st)
 			a.NoError(err)
 
 			if !info1.IsSigner {

@@ -150,62 +150,62 @@ func (f *ftTracker) applyCommand(t *Engine, cmd isFtTrackerCmd) {
 }
 
 func (f *ftTracker) applySignCommand(t *Engine, cmd *signCommand) {
-	sigState, ok := f.sigsState[trackidStr(cmd.SigningInfo.TrackingID[:])]
-	// TODO: Think how to handle all incoming trackid which are tied specifically to this digest.
-	if !ok {
-		sigState = &signatureState{
-			digest:   nil,
-			trackids: map[trackidStr]bool{},
-			chain:    cmd.ChainID,
+	// sigState, ok := f.sigsState[trackidStr(cmd.SigningInfo.TrackingID.ToString())]
+	// // TODO: Think how to handle all incoming trackid which are tied specifically to this digest.
+	// if !ok {
+	// 	sigState = &signatureState{
+	// 		digest:   nil,
+	// 		trackids: map[trackidStr]bool{},
+	// 		chain:    cmd.ChainID,
 
-			signingComittee:         []*tss.PartyID{},
-			sawProtocolMessagesFrom: map[strPartyId]bool{},
-			alertTime:               time.Time{},
-			beginTime:               time.Now(),
-		}
+	// 		signingComittee:         []*tss.PartyID{},
+	// 		sawProtocolMessagesFrom: map[strPartyId]bool{},
+	// 		alertTime:               time.Time{},
+	// 		beginTime:               time.Now(),
+	// 	}
 
-		f.sigsState[trackidStr(cmd.Digest[:])] = sigState
-	}
+	// 	f.sigsState[trackidStr(cmd.Digest[:])] = sigState
+	// }
 
-	sigState.approvedToSign = true
+	// // sigState.approvedToSign = true
 
-	cpy := party.Digest{}
-	copy(cpy[:], cmd.Digest[:])
-	sigState.digest = &cpy
+	// // cpy := party.Digest{}
+	// // copy(cpy[:], cmd.Digest[:])
+	// // sigState.digest = &cpy
 
-	sigState.trackids[trackidStr(cmd.Digest[:])] = true
-	sigState.trackids[trackidStr(cmd.SigningInfo.TrackingID)] = true
+	// // sigState.trackids[trackidStr(cmd.Digest[:])] = true
+	// // sigState.trackids[trackidStr(cmd.SigningInfo.TrackingID.ToString())] = true
 
-	sigState.chain = cmd.ChainID
+	// // sigState.chain = cmd.ChainID
 
-	sigInfo := cmd.SigningInfo
+	// // sigInfo := cmd.SigningInfo
 
-	// check if we need to ammend the committee due to known faulties.
-	faultiesInCurrentComittee := []*tss.PartyID{}
-	for _, pid := range cmd.SigningInfo.SigningCommittee {
-		m := f.membersData[strPartyId(partyIdToString(pid))]
-		if m.timeToRevive[cmd.ChainID].After(time.Now()) { // TODO: see how to support overlapping case.
-			faultiesInCurrentComittee = append(faultiesInCurrentComittee, pid)
-		}
-	}
+	// // // check if we need to ammend the committee due to known faulties.
+	// // faultiesInCurrentComittee := []*tss.PartyID{}
+	// // for _, pid := range cmd.SigningInfo.SigningCommittee {
+	// // 	m := f.membersData[strPartyId(partyIdToString(pid))]
+	// // 	if m.timeToRevive[cmd.ChainID].After(time.Now()) { // TODO: see how to support overlapping case.
+	// // 		faultiesInCurrentComittee = append(faultiesInCurrentComittee, pid)
+	// // 	}
+	// // }
 
-	if len(faultiesInCurrentComittee) >= 0 {
-		// todo: ensure that we remove this sig from responsibility of the faulties (in case they already started signing).
-		newSigningInfo, err := t.fp.RemovePariticipantsFromSigning(cmd.Digest, faultiesInCurrentComittee)
-		if err != nil {
-			// TODO: should we inform error and tell others to stop relying on this guardian?
-			panic("not implemented yet")
-		}
+	// if len(faultiesInCurrentComittee) >= 0 {
+	// 	// todo: ensure that we remove this sig from responsibility of the faulties (in case they already started signing).
+	// 	// newSigningInfo, err := t.fp.RemovePariticipantsFromSigning(cmd.Digest, faultiesInCurrentComittee)
+	// 	if err != nil {
+	// 		// TODO: should we inform error and tell others to stop relying on this guardian?
+	// 		panic("not implemented yet")
+	// 	}
 
-		sigInfo = &newSigningInfo.NewSigningInfo
-	}
+	// 	sigInfo = &newSigningInfo.NewSigningInfo
+	// }
 
 	// store for each party the sigs it is responsible for.
 	// thus on failure, we can find what sigs they should be removed from.
-	for _, pid := range sigInfo.SigningCommittee {
-		strPid := strPartyId(partyIdToString(pid))
-		f.membersData[strPid].sigsUnderThisParty[trackidStr(cmd.SigningInfo.TrackingID[:])] = sigState
-	}
+	// for _, pid := range sigInfo.SigningCommittee {
+	// 	strPid := strPartyId(partyIdToString(pid))
+	// 	f.membersData[strPid].sigsUnderThisParty[trackidStr(cmd.SigningInfo.TrackingID[:])] = sigState
+	// }
 }
 
 func (f *ftTracker) applyDeliveryCommand(t *Engine, cmd *deliveryCommand) {
