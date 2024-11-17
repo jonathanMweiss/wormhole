@@ -6,6 +6,7 @@ import (
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/certusone/wormhole/node/pkg/tss/internal"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
+	"github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/tss"
 	"go.uber.org/zap"
@@ -49,6 +50,18 @@ type deliveryCommand struct {
 // supporting the isFtTrackerCmd interface
 func (d *deliveryCommand) isCmd() {}
 
+type inactives struct {
+	partyIDs []*tss.PartyID
+}
+
+// Used to know which guardians aren't to be used in the protocol for specific chainID.
+type getInactiveGuardiansCommand struct {
+	ChainID vaa.ChainID
+	reply   chan inactives
+}
+
+func (g *getInactiveGuardiansCommand) isCmd() {}
+
 type ftChans struct {
 	tellCmd chan isFtTrackerCmd
 	//removeTrackID chan []byte//  TODO: make part of cmd: //  // the engine might request to clean trackIDs related to the reliable-broadcast.
@@ -76,15 +89,14 @@ type Problem struct {
 //
 // Once the timer of the heap pops, we check the state of the signature and decide what to do (change comitte members, etc).
 type signatureState struct {
-	digest   *party.Digest       // nil if not seen yet.
-	trackids map[trackidStr]bool // there might be multiple trackids for a single digest (due to multiple faults).
-	chain    vaa.ChainID         // blockchain the message relates to (e.g. Ethereum, Solana, etc).
+	chain vaa.ChainID // blockchain the message relates to (e.g. Ethereum, Solana, etc).
 
 	approvedToSign bool
 
-	signingComittee []*tss.PartyID // without faults.
-
-	sawProtocolMessagesFrom map[strPartyId]bool // TODO.
+	// each trackingId is a unique attempt to sign a message.
+	// Once one of the trackidStr saw f+1 guardians and we haven't seent the digest yet, we can assume
+	// we are behind the network and we should inform the others.
+	sawProtocolMessagesFrom map[trackidStr]map[strPartyId]bool
 
 	alertTime time.Time
 
@@ -98,13 +110,14 @@ func (s *signatureState) GetEndTime() time.Time {
 
 // Describes a specfic party's data in terms of fault tolerance.
 type ftPartyData struct {
+	partyID            *tss.PartyID
 	timeToRevive       map[vaa.ChainID]time.Time // the time this party is expected to come back and be part of the protocol again.
-	sigsUnderThisParty map[trackidStr]*signatureState
+	sigsUnderThisParty map[party.Digest]*signatureState
 }
 
 type ftTracker struct {
 	sigAlerts internal.Ttlheap[*signatureState]
-	sigsState map[trackidStr]*signatureState
+	sigsState map[party.Digest]*signatureState
 	// for starters, we assume any fault is on all chains.
 	membersData map[strPartyId]ftPartyData
 	// reviveTimer   internal.Ttlheap[TODO:] // used to tell when someone can join the protocol again
@@ -114,7 +127,7 @@ type ftTracker struct {
 func (t *Engine) ftTracker() {
 	f := &ftTracker{
 		sigAlerts:   internal.NewTtlHeap[*signatureState](),
-		sigsState:   make(map[trackidStr]*signatureState),
+		sigsState:   make(map[party.Digest]*signatureState),
 		membersData: make(map[strPartyId]ftPartyData),
 	}
 
@@ -122,7 +135,7 @@ func (t *Engine) ftTracker() {
 		strPid := strPartyId(partyIdToString(pid))
 		f.membersData[strPid] = ftPartyData{
 			timeToRevive:       map[vaa.ChainID]time.Time{},
-			sigsUnderThisParty: map[trackidStr]*signatureState{},
+			sigsUnderThisParty: map[party.Digest]*signatureState{},
 		}
 	}
 
@@ -131,106 +144,107 @@ func (t *Engine) ftTracker() {
 		case <-t.ctx.Done():
 			return
 		case cmd := <-t.ftChans.tellCmd:
-			f.applyCommand(t, cmd)
+			f.executeCommand(t, cmd)
 		case <-f.sigAlerts.WaitOnTimer():
 			f.inspectAlertHeapsTop(t)
 		}
 	}
 }
 
-func (f *ftTracker) applyCommand(t *Engine, cmd isFtTrackerCmd) {
+func (f *ftTracker) executeCommand(t *Engine, cmd isFtTrackerCmd) {
 	switch c := cmd.(type) {
 	case *signCommand:
-		f.applySignCommand(t, c)
+		f.executeSignCommand(t, c)
 	case *deliveryCommand:
-		f.applyDeliveryCommand(t, c)
+		f.executeDeliveryCommand(t, c)
+	case *getInactiveGuardiansCommand:
+		f.executeGetIncativeGuardiansCommand(t, c)
 	default:
 		t.logger.Error("received unknown command type", zap.Any("cmd", cmd))
 	}
 }
 
-func (f *ftTracker) applySignCommand(t *Engine, cmd *signCommand) {
-	// sigState, ok := f.sigsState[trackidStr(cmd.SigningInfo.TrackingID.ToString())]
-	// // TODO: Think how to handle all incoming trackid which are tied specifically to this digest.
-	// if !ok {
-	// 	sigState = &signatureState{
-	// 		digest:   nil,
-	// 		trackids: map[trackidStr]bool{},
-	// 		chain:    cmd.ChainID,
+func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInactiveGuardiansCommand) {
+	if cmd.reply == nil {
+		t.logger.Error("reply channel is nil")
+		return
+	}
 
-	// 		signingComittee:         []*tss.PartyID{},
-	// 		sawProtocolMessagesFrom: map[strPartyId]bool{},
-	// 		alertTime:               time.Time{},
-	// 		beginTime:               time.Now(),
-	// 	}
+	reply := inactives{}
+	for _, m := range f.membersData {
+		t, ok := m.timeToRevive[cmd.ChainID]
+		if ok && t.After(time.Now()) { // TODO: maybe add some buffer time here. + support more than one attemp
+			reply.partyIDs = append(reply.partyIDs, m.partyID)
+		}
+	}
 
-	// 	f.sigsState[trackidStr(cmd.Digest[:])] = sigState
-	// }
-
-	// // sigState.approvedToSign = true
-
-	// // cpy := party.Digest{}
-	// // copy(cpy[:], cmd.Digest[:])
-	// // sigState.digest = &cpy
-
-	// // sigState.trackids[trackidStr(cmd.Digest[:])] = true
-	// // sigState.trackids[trackidStr(cmd.SigningInfo.TrackingID.ToString())] = true
-
-	// // sigState.chain = cmd.ChainID
-
-	// // sigInfo := cmd.SigningInfo
-
-	// // // check if we need to ammend the committee due to known faulties.
-	// // faultiesInCurrentComittee := []*tss.PartyID{}
-	// // for _, pid := range cmd.SigningInfo.SigningCommittee {
-	// // 	m := f.membersData[strPartyId(partyIdToString(pid))]
-	// // 	if m.timeToRevive[cmd.ChainID].After(time.Now()) { // TODO: see how to support overlapping case.
-	// // 		faultiesInCurrentComittee = append(faultiesInCurrentComittee, pid)
-	// // 	}
-	// // }
-
-	// if len(faultiesInCurrentComittee) >= 0 {
-	// 	// todo: ensure that we remove this sig from responsibility of the faulties (in case they already started signing).
-	// 	// newSigningInfo, err := t.fp.RemovePariticipantsFromSigning(cmd.Digest, faultiesInCurrentComittee)
-	// 	if err != nil {
-	// 		// TODO: should we inform error and tell others to stop relying on this guardian?
-	// 		panic("not implemented yet")
-	// 	}
-
-	// 	sigInfo = &newSigningInfo.NewSigningInfo
-	// }
-
-	// store for each party the sigs it is responsible for.
-	// thus on failure, we can find what sigs they should be removed from.
-	// for _, pid := range sigInfo.SigningCommittee {
-	// 	strPid := strPartyId(partyIdToString(pid))
-	// 	f.membersData[strPid].sigsUnderThisParty[trackidStr(cmd.SigningInfo.TrackingID[:])] = sigState
-	// }
+	select {
+	case cmd.reply <- reply:
+		close(cmd.reply)
+	default:
+		t.logger.Error("getInactiveGuardiansCommand.reply channel is full")
+	}
 }
 
-func (f *ftTracker) applyDeliveryCommand(t *Engine, cmd *deliveryCommand) {
-	// strTrackid := trackidStr(cmd.parsedMsg.WireMsg().TrackingID)
-	// sigState, ok := f.sigsState[strTrackid]
-	// if !ok {
-	// 	sigState = &signatureState{
-	// 		digest:                  nil, // unknown for now. TODO: consider adding to the message fields.
-	// 		trackids:                map[trackidStr]bool{},
-	// 		chain:                   -1, // unknown for now. (TODO: add fields to tss message to find the chain out)
-	// 		approvedToSign:          false,
-	// 		signingComittee:         []*tss.PartyID{}, // unknown for now.
-	// 		sawProtocolMessagesFrom: map[strPartyId]bool{},
-	// 		alertTime:               time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
-	// 		beginTime:               time.Now(),
-	// 	}
-	// 	f.sigsState[strTrackid] = sigState
-	// }
+// used to update the state of the signature, ensuring alerts can be ignored.
+func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
+	state, ok := f.sigsState[cmd.Digest]
+	if !ok {
+		state = &signatureState{
+			sawProtocolMessagesFrom: map[trackidStr]map[strPartyId]bool{},
+			alertTime:               time.Now(), // no alert time.
+			beginTime:               time.Now(),
+		}
+		f.sigsState[cmd.Digest] = state
+	}
 
-	// sigState.trackids[strTrackid] = true
+	state.chain = cmd.ChainID
+	state.approvedToSign = true
+}
 
-	// sigState.sawProtocolMessagesFrom[strPartyId(partyIdToString(cmd.from))] = true
+func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
+	wmsg := cmd.parsedMsg.WireMsg()
+	if wmsg == nil {
+		t.logger.Error("deliveryCommand: wire message is nil")
+		return
+	}
 
-	// // sigState.
+	tid := wmsg.GetTrackingID()
+	if tid == nil {
+		t.logger.Error("deliveryCommand: tracking id is nil")
+		return
+	}
 
+	dgst := party.Digest{}
+	copy(dgst[:], tid.GetDigest())
+
+	state, ok := f.sigsState[dgst]
+	if !ok {
+		// create a sig state.
+		state = &signatureState{
+			chain:                   extractChainIDFromTrackingID(tid),
+			approvedToSign:          false,
+			sawProtocolMessagesFrom: map[trackidStr]map[strPartyId]bool{},
+			alertTime:               time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
+			beginTime:               time.Now(),
+		}
+		f.sigsState[dgst] = state
+
+		// Since this is a delivery and not a sign command, we add this to the alert heap.
+		f.sigAlerts.Enqueue(state)
+	}
+
+	votes, ok := state.sawProtocolMessagesFrom[trackidStr(tid.ToString())]
+	if !ok {
+		votes = map[strPartyId]bool{}
+		state.sawProtocolMessagesFrom[trackidStr(tid.ToString())] = votes
+	}
+
+	votes[strPartyId(partyIdToString(cmd.from))] = true
+}
+
+func extractChainIDFromTrackingID(tid *common.TrackingID) vaa.ChainID {
+	return 0 // TODO.
 }
 
 func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
@@ -241,14 +255,19 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 	}
 
 	// At least one honest guardian saw the message, but I didn't (I'm probablt behined the network).
-	if len(sigState.sawProtocolMessagesFrom) >= t.GuardianStorage.getMaxExpectedFaults()+1 {
-		intoChannelOrDone(t.ctx, t.ftChans.tellProblem, Problem{
+	if sigState.maxGuardianVotes() >= t.GuardianStorage.getMaxExpectedFaults()+1 {
+		problem := Problem{
 			idWithIssue:        partyIdToProto(t.Self),
 			blockchainID:       sigState.chain,
 			relenquishTime:     time.Now(),
 			relenquishDuration: time.Minute * 10,
-			signature:          []byte{}, // TODO
-		})
+			signature:          []byte{}, // TODO: must be signed.
+			// perhaps loaded into echo and signed there...
+		}
+
+		t.logger.Warn("detected a possible fault", zap.Any("", problem))
+
+		intoChannelOrDone(t.ctx, t.ftChans.tellProblem, problem)
 
 		return
 	}
@@ -257,4 +276,15 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 	// increasing timeout for this signature.
 	sigState.alertTime = time.Now().Add(t.MaxSigStartWaitTime / 2) // TODO: what should be the value here?
 	f.sigAlerts.Enqueue(sigState)
+}
+
+func (s *signatureState) maxGuardianVotes() int {
+	max := 0
+	for _, uniqueVoters := range s.sawProtocolMessagesFrom {
+		if len(uniqueVoters) > max {
+			max = len(uniqueVoters)
+		}
+	}
+
+	return max
 }
