@@ -219,9 +219,23 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	d := party.Digest{}
 	copy(d[:], vaaDigest)
 
+	cmd := getInactiveGuardiansCommand{
+		reply: make(chan inactives, 1),
+	}
+
+	if err := intoChannelOrDone[isFtTrackerCmd](t.ctx, t.ftChans.tellCmd, &cmd); err != nil {
+		return fmt.Errorf("failed to request for inactive guardians: %w", err)
+	}
+
+	inactiveParties, err := outofChannelOrDone(t.ctx, cmd.reply)
+	if err != nil {
+		return fmt.Errorf("failed to get inactive guardians: %w", err)
+	}
+
 	info, err := t.fp.AsyncRequestNewSignature(party.SigningTask{
-		Digest: d,
-		// TODO
+		Digest:       d,
+		Faulties:     inactiveParties.partyIDs,
+		AuxilaryData: []byte{}, // TODO
 	})
 	if err != nil {
 		return err
@@ -391,7 +405,9 @@ func (t *Engine) handleFpSignature(sig *common.SignatureData) {
 
 	t.sigCounter.remove(sig.TrackingId)
 
-	intoChannelOrDone(t.ctx, t.sigOutChan, sig)
+	if err := intoChannelOrDone(t.ctx, t.sigOutChan, sig); err != nil {
+		t.logger.Error("couldn't deliver outside of engine the signature", zap.Error(err), zap.String("trackingId", sig.TrackingId.ToString()))
+	}
 }
 
 func (t *Engine) handleFpError(err *tss.Error) {
@@ -418,7 +434,12 @@ func (t *Engine) handleFpOutput(m tss.Message) {
 	if err == nil {
 		sentMsgCntr.Inc()
 
-		intoChannelOrDone(t.ctx, t.messageOutChan, tssMsg)
+		if err := intoChannelOrDone(t.ctx, t.messageOutChan, tssMsg); err != nil {
+			t.logger.Error("couldn't output message to be sent via network",
+				zap.Error(err),
+				zap.String("trackingId", m.WireMsg().GetTrackingID().ToString()),
+			)
+		}
 
 		return
 	}
@@ -553,7 +574,11 @@ func (t *Engine) sendEchoOut(m Incoming) error {
 		return fmt.Errorf("failed to clone echo message")
 	}
 
-	intoChannelOrDone[Sendable](t.ctx, t.messageOutChan, newEcho(content.Message, t.guardiansProtoIDs))
+	ech := newEcho(content.Message, t.guardiansProtoIDs)
+
+	if err := intoChannelOrDone[Sendable](t.ctx, t.messageOutChan, ech); err != nil {
+		return fmt.Errorf("couldn't output echo to be sent via network: %w", err)
+	}
 
 	return nil
 }

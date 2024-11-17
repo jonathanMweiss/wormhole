@@ -178,12 +178,8 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 		}
 	}
 
-	select {
-	case cmd.reply <- reply:
-		close(cmd.reply)
-	default:
-		t.logger.Error("getInactiveGuardiansCommand.reply channel is full")
-	}
+	intoChannelOrDone(t.ctx, cmd.reply, reply)
+	close(cmd.reply)
 }
 
 // used to update the state of the signature, ensuring alerts can be ignored.

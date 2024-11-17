@@ -287,9 +287,21 @@ func getRound(m tss.ParsedMessage) (signingRound, error) {
 	}
 }
 
-func intoChannelOrDone[T any](ctx context.Context, c chan T, v T) {
+func intoChannelOrDone[T any](ctx context.Context, c chan T, v T) error {
 	select {
 	case c <- v:
+		return nil
 	case <-ctx.Done():
+		return fmt.Errorf("error sending to channel: %w", ctx.Err())
+	}
+}
+
+func outofChannelOrDone[T any](ctx context.Context, c chan T) (T, error) {
+	var v T
+	select {
+	case v = <-c:
+		return v, nil
+	case <-ctx.Done():
+		return v, ctx.Err()
 	}
 }
