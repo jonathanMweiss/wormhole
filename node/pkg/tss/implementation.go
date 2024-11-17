@@ -55,6 +55,11 @@ type Engine struct {
 	sigCounter activeSigCounter
 
 	// used for fault-tolerance:
+	// informs a central tracker of the guardian's actions.
+	// used to ensure the guardian is in the loop, and which guardians are active and on which chain.
+	//
+	// If the guardian attempted to sign previously, but wasn't part of the comittee, on some cases might change this case and add this
+	// guardian to the committee.
 	ftChans
 }
 
@@ -223,7 +228,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		reply: make(chan inactives, 1),
 	}
 
-	if err := intoChannelOrDone[isFtTrackerCmd](t.ctx, t.ftChans.tellCmd, &cmd); err != nil {
+	if err := intoChannelOrDone[ftCommand](t.ctx, t.ftChans.tellCmd, &cmd); err != nil {
 		return fmt.Errorf("failed to request for inactive guardians: %w", err)
 	}
 
@@ -238,7 +243,12 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		AuxilaryData: []byte{}, // TODO
 	})
 	if err != nil {
+		// TODO: should i tell that the guardian started even on failure?
 		return err
+	}
+
+	t.ftChans.tellCmd <- &signCommand{
+		SigningInfo: info,
 	}
 
 	if info.IsSigner {
@@ -298,11 +308,11 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		started: atomic.Uint32{}, // default value is 0
 
 		sigCounter: newSigCounter(),
+	}
 
-		ftChans: ftChans{
-			tellCmd:     make(chan isFtTrackerCmd),
-			tellProblem: make(chan Problem),
-		},
+	t.ftChans = ftChans{
+		tellCmd:     make(chan ftCommand, cap(t.fpOutChan)),
+		tellProblem: make(chan Problem),
 	}
 
 	return t, nil
@@ -649,6 +659,13 @@ func (t *Engine) feedIncomingToFp(parsed tss.ParsedMessage) error {
 	maxLiveSignatures := t.GuardianStorage.MaxSimultaneousSignatures
 
 	if ok := t.sigCounter.add(trackId, from, maxLiveSignatures); ok {
+		// TODO: Should I update that a delivery was made even if sigCounter blocked it?
+
+		t.ftChans.tellCmd <- &deliveryCommand{
+			parsedMsg: parsed,
+			from:      from,
+		}
+
 		return t.fp.Update(parsed)
 	}
 

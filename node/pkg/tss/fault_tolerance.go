@@ -21,34 +21,32 @@ import (
 // This implies that I am delayed, and I should temporarily remove myself from the committees for some time.
 
 type trackidStr string
-type isFtTrackerCmd interface {
+type ftCommand interface {
 	// TODO: consider applyCmd(*Engine, *ftTracker) instead of this.
-	isCmd() // marker interface
+	ftCmd() // marker interface
 }
 
 type signCommand struct {
-	Digest      party.Digest
-	ChainID     vaa.ChainID
 	SigningInfo *party.SigningInfo
 }
 
-// supporting the isFtTrackerCmd interface
-func (s *signCommand) isCmd() {}
+// supporting the ftCmd interface
+func (s *signCommand) ftCmd() {}
 
 type sigDoneCommand struct {
 	Digest  party.Digest
 	trackId []byte
 }
 
-func (s *sigDoneCommand) isCmd() {}
+func (s *sigDoneCommand) ftCmd() {}
 
 type deliveryCommand struct {
 	parsedMsg tss.Message
 	from      *tss.PartyID
 }
 
-// supporting the isFtTrackerCmd interface
-func (d *deliveryCommand) isCmd() {}
+// supporting the ftCmd interface
+func (d *deliveryCommand) ftCmd() {}
 
 type inactives struct {
 	partyIDs []*tss.PartyID
@@ -60,10 +58,10 @@ type getInactiveGuardiansCommand struct {
 	reply   chan inactives
 }
 
-func (g *getInactiveGuardiansCommand) isCmd() {}
+func (g *getInactiveGuardiansCommand) ftCmd() {}
 
 type ftChans struct {
-	tellCmd chan isFtTrackerCmd
+	tellCmd chan ftCommand
 	//removeTrackID chan []byte//  TODO: make part of cmd: //  // the engine might request to clean trackIDs related to the reliable-broadcast.
 	tellProblem chan Problem
 }
@@ -143,6 +141,7 @@ func (t *Engine) ftTracker() {
 		select {
 		case <-t.ctx.Done():
 			return
+
 		case cmd := <-t.ftChans.tellCmd:
 			f.executeCommand(t, cmd)
 		case <-f.sigAlerts.WaitOnTimer():
@@ -151,7 +150,7 @@ func (t *Engine) ftTracker() {
 	}
 }
 
-func (f *ftTracker) executeCommand(t *Engine, cmd isFtTrackerCmd) {
+func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
 	switch c := cmd.(type) {
 	case *signCommand:
 		f.executeSignCommand(t, c)
@@ -178,23 +177,36 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 		}
 	}
 
-	intoChannelOrDone(t.ctx, cmd.reply, reply)
+	if err := intoChannelOrDone(t.ctx, cmd.reply, reply); err != nil {
+		t.logger.Error("error on telling on inactive guardians on specific chain", zap.Error(err))
+	}
+
 	close(cmd.reply)
 }
 
 // used to update the state of the signature, ensuring alerts can be ignored.
 func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
-	state, ok := f.sigsState[cmd.Digest]
-	if !ok {
-		state = &signatureState{
-			sawProtocolMessagesFrom: map[trackidStr]map[strPartyId]bool{},
-			alertTime:               time.Now(), // no alert time.
-			beginTime:               time.Now(),
-		}
-		f.sigsState[cmd.Digest] = state
+	tid := cmd.SigningInfo.TrackingID
+	if tid == nil {
+		t.logger.Error("signCommand: tracking id is nil")
+		return
 	}
 
-	state.chain = cmd.ChainID
+	dgst := party.Digest{}
+	copy(dgst[:], tid.Digest[:])
+
+	state, ok := f.sigsState[dgst]
+	if !ok {
+		state = &signatureState{
+			chain: extractChainIDFromTrackingID(tid),
+
+			sawProtocolMessagesFrom: map[trackidStr]map[strPartyId]bool{},
+			alertTime:               time.Now(),
+			beginTime:               time.Now(),
+		}
+		f.sigsState[dgst] = state
+	}
+
 	state.approvedToSign = true
 }
 
