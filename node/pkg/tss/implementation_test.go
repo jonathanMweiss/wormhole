@@ -625,6 +625,53 @@ func TestE2E(t *testing.T) {
 	a.Equal(committeeSize*numBroadcastRounds*len(engines), int(m.Counter.GetValue()))
 }
 
+func TestFT(t *testing.T) {
+	a := assert.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*2)
+	defer cancel()
+	ctx = testutils.MakeSupervisorContext(ctx)
+
+	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+	engines := loadGuardians(a)
+	fmt.Println("starting engines.")
+	for _, engine := range engines {
+		a.NoError(engine.Start(ctx))
+	}
+
+	fmt.Println("msgHandler settup:")
+	dnchn := msgHandler(ctx, engines)
+
+	fmt.Println("engines started, requesting sigs")
+
+	e := getSigningGuardian(a, engines, digest(dgst))
+
+	enginesWithoutE := make([]*Engine, 0, len(engines)-1)
+	eSelf := partyIdToString(e.Self)
+	for i := range engines {
+		if partyIdToString(engines[i].Self) == eSelf {
+			continue
+		}
+
+		enginesWithoutE = append(enginesWithoutE, engines[i])
+	}
+
+	// all engines are started, now we can begin the protocol.
+	for _, engine := range enginesWithoutE {
+		tmp := make([]byte, 32)
+		copy(tmp, dgst[:])
+		engine.BeginAsyncThresholdSigningProtocol(tmp)
+	}
+
+	select {
+	case <-dnchn:
+	case <-ctx.Done():
+		t.FailNow()
+		return
+	}
+}
+
 func TestMessagesWithBadRounds(t *testing.T) {
 	a := assert.New(t)
 	gs := load5GuardiansSetupForBroadcastChecks(a)
@@ -886,7 +933,8 @@ func TestSigCounter(t *testing.T) {
 	t.Run("MaxCountBlockAdditionalUpdates", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
 		digests := []digest{{1}, {2}}
-		e1 := loadSigningGuardian(a, ctx, digests...)
+		engines := load5GuardiansSetupForBroadcastChecks(a)
+		e1 := getSigningGuardian(a, engines, digests...)
 
 		e1.MaxSimultaneousSignatures = 1
 		e1.Start(ctx)
@@ -910,7 +958,8 @@ func TestSigCounter(t *testing.T) {
 	t.Run("ErrorReduceCount", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
 		digests := []digest{{1}}
-		e1 := loadSigningGuardian(a, ctx, digests...)
+		engines := load5GuardiansSetupForBroadcastChecks(a)
+		e1 := getSigningGuardian(a, engines, digests...)
 		e1.MaxSimultaneousSignatures = 1
 
 		e1.Start(ctx)
@@ -944,7 +993,8 @@ func TestSigCounter(t *testing.T) {
 	t.Run("sigDoneReduceCount", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
 		digests := []digest{{1}}
-		e1 := loadSigningGuardian(a, ctx, digests...)
+		engines := load5GuardiansSetupForBroadcastChecks(a)
+		e1 := getSigningGuardian(a, engines, digests...)
 		e1.MaxSimultaneousSignatures = 1
 
 		e1.Start(ctx)
@@ -977,7 +1027,8 @@ func TestSigCounter(t *testing.T) {
 
 	t.Run("CanHaveSimulSigners", func(t *testing.T) {
 		digests := []digest{{1}, {2}}
-		e1 := loadSigningGuardian(a, ctx, digests...)
+		engines := load5GuardiansSetupForBroadcastChecks(a)
+		e1 := getSigningGuardian(a, engines, digests...)
 		e1.MaxSimultaneousSignatures = 2
 
 		e1.Start(ctx)
@@ -997,10 +1048,8 @@ func TestSigCounter(t *testing.T) {
 	})
 }
 
-func loadSigningGuardian(a *assert.Assertions, ctx context.Context, digests ...digest) *Engine {
+func getSigningGuardian(a *assert.Assertions, engines []*Engine, digests ...digest) *Engine {
 	a.GreaterOrEqual(len(digests), 1) // at least one
-
-	engines := load5GuardiansSetupForBroadcastChecks(a)
 
 mainloop:
 	for _, e := range engines {

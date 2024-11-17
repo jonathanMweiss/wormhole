@@ -271,6 +271,10 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		storage.MaxSignerTTL = defaultMaxSignerTTL
 	}
 
+	if storage.MaxSigStartWaitTime == 0 {
+		storage.MaxSigStartWaitTime = defaultMaxSigStartWaitTime
+	}
+
 	fpParams := &party.Parameters{
 		SavedSecrets:         storage.SavedSecretParameters,
 		PartyIDs:             storage.Guardians,
