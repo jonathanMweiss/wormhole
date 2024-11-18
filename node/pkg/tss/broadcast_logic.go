@@ -15,6 +15,59 @@ import (
 // voterId is comprised from the id and key of the signer, should match the guardians (in GuardianStorage) id and key.
 type voterId string
 
+// SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.
+//
+// We don't add the content of the message to the uuid, instead we collect all data that can put this message in a context.
+// this is used by the reliable broadcast to check no two messages from the same sender will be used to update the full party
+// in the same round for the specific session of the protocol.
+type hasUUID interface {
+	getUUID(loadDistKey []byte) (uuid, error)
+}
+type parsedMsg interface {
+	hasUUID // most important feature.
+	wrapError(error) error
+	getTrackingID() *common.TrackingID // can be nil too.
+}
+
+type parsedProblem struct{ *tsscommv1.Problem }
+
+type parsedTsscontent struct {
+	tss.ParsedMessage
+	signingRound
+}
+
+func (msg *parsedTsscontent) getUUID(loadDistKey []byte) (uuid, error) {
+	return getMessageUUID(msg.ParsedMessage, loadDistKey)
+}
+
+func (p *parsedTsscontent) wrapError(err error) error {
+	if p == nil {
+		return err
+	}
+
+	return logableError{
+		cause:      err,
+		trackingId: p.getTrackingID(),
+		round:      p.signingRound,
+	}
+}
+
+func (p *parsedTsscontent) getTrackingID() *common.TrackingID {
+	if p == nil {
+		return nil
+	}
+
+	if p.ParsedMessage == nil {
+		return nil
+	}
+
+	if p.WireMsg() == nil {
+		return nil
+	}
+
+	return p.WireMsg().GetTrackingID()
+}
+
 type broadcaststate struct {
 	// The following three fields should not be changed after creation of broadcaststate:
 	timeReceived  time.Time
@@ -103,7 +156,7 @@ func (st *GuardianStorage) getMaxExpectedFaults() int {
 	return (st.Threshold) / 2 // this is the floor of the result.
 }
 
-func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
+func (t *Engine) relbroadcastInspection(parsed parsedMsg, msg Incoming) (shouldEcho bool, shouldDeliver bool, err error) {
 	// No need to check input: it was already checked before reaching this point
 
 	signed := msg.toEcho().Message
@@ -129,14 +182,10 @@ func (t *Engine) relbroadcastInspection(parsed tss.ParsedMessage, msg Incoming) 
 	return allowedToBroadcast, false, nil
 }
 
-func (t *Engine) fetchState(parsed tss.ParsedMessage, signed *tsscommv1.SignedMessage) (*broadcaststate, error) {
-	uuid, err := t.getMessageUUID(parsed)
+func (t *Engine) fetchState(parsed parsedMsg, signed *tsscommv1.SignedMessage) (*broadcaststate, error) {
+	uuid, err := parsed.getUUID(t.LoadDistributionKey)
 	if err != nil {
 		return nil, err
-	}
-
-	if parsed.WireMsg() == nil || parsed.WireMsg().TrackingID == nil {
-		return nil, fmt.Errorf("tracking id is nil")
 	}
 
 	t.mtx.Lock()
@@ -155,7 +204,7 @@ func (t *Engine) fetchState(parsed tss.ParsedMessage, signed *tsscommv1.SignedMe
 		timeReceived:  time.Now(),
 		messageDigest: hashSignedMessage(signed),
 
-		trackingId: parsed.WireMsg().TrackingID,
+		trackingId: parsed.getTrackingID(),
 
 		votes:            make(map[voterId]bool),
 		echoedAlready:    false,
