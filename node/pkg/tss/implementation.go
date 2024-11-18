@@ -499,9 +499,11 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 		return nil, err
 	}
 
-	content := &tsscommv1.TssContent{
-		Payload:         bts,
-		MsgSerialNumber: atomic.AddUint64(&t.msgSerialNumber, 1),
+	content := &tsscommv1.SignedMessage_TssContent{
+		TssContent: &tsscommv1.TssContent{
+			Payload:         bts,
+			MsgSerialNumber: atomic.AddUint64(&t.msgSerialNumber, 1),
+		},
 	}
 
 	var sendable Sendable
@@ -525,7 +527,7 @@ func (t *Engine) intoSendable(m tss.Message) (Sendable, error) {
 		}
 
 		sendable = &Unicast{
-			Unicast:     content,
+			Unicast:     content.TssContent,
 			Receipients: indices,
 		}
 	}
@@ -790,7 +792,13 @@ func (t *Engine) parseEcho(m Incoming) (tss.ParsedMessage, error) {
 		return nil, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
 	}
 
-	return tss.ParseWireMessage(echoMsg.Message.Content.Payload, senderPid, true)
+	cntnt, ok := echoMsg.Message.Content.(*tsscommv1.SignedMessage_TssContent)
+	if !ok {
+		return nil, fmt.Errorf("can't parse non TSS content in to TSS message")
+	}
+
+	return tss.ParseWireMessage(cntnt.TssContent.Payload, senderPid, true)
+
 }
 
 // SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.

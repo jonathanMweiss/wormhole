@@ -10,6 +10,7 @@ import (
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/tss"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Fault tolerance:
@@ -63,22 +64,13 @@ func (g *getInactiveGuardiansCommand) ftCmd() {}
 type ftChans struct {
 	tellCmd chan ftCommand
 	//removeTrackID chan []byte//  TODO: make part of cmd: //  // the engine might request to clean trackIDs related to the reliable-broadcast.
+
+	// Used to tell the tracker on a faulty node.
 	tellProblem chan Problem
 }
 
 type Problem struct {
-	idWithIssue *tsscommv1.PartyId
-	// hadntSeenTrackId []byte      // trackid
-	blockchainID vaa.ChainID // what chain this problem is related to.
-
-	relenquishTime     time.Time
-	relenquishDuration time.Duration
-
-	signature []byte
-
-	// TODO: consider more fields.
-	// digest
-	// blockchain info
+	tsscommv1.Problem
 }
 
 // this signature structs are held by two different data structures.
@@ -89,6 +81,7 @@ type Problem struct {
 type signatureState struct {
 	chain vaa.ChainID // blockchain the message relates to (e.g. Ethereum, Solana, etc).
 
+	// States whether the guardian saw the digest and forwarded it to the engine to be signed by TSS.
 	approvedToSign bool
 
 	// each trackingId is a unique attempt to sign a message.
@@ -264,18 +257,31 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 
 	// At least one honest guardian saw the message, but I didn't (I'm probablt behined the network).
 	if sigState.maxGuardianVotes() >= t.GuardianStorage.getMaxExpectedFaults()+1 {
-		problem := Problem{
-			idWithIssue:        partyIdToProto(t.Self),
-			blockchainID:       sigState.chain,
-			relenquishTime:     time.Now(),
-			relenquishDuration: time.Minute * 10,
-			signature:          []byte{}, // TODO: must be signed.
-			// perhaps loaded into echo and signed there...
+		t.logger.Info("noticed i'm behind others, and attemmpting to inform them",
+			zap.String("chainID", sigState.chain.String()), // TODO.
+		)
+
+		sm := &tsscommv1.SignedMessage{
+			Content: &tsscommv1.SignedMessage_Problem{
+				Problem: &tsscommv1.Problem{
+					ChainID:     uint32(sigState.chain),
+					Emitter:     0, // TODO
+					IssuingTime: timestamppb.Now(),
+				},
+			},
+			Sender:    partyIdToProto(t.Self),
+			Signature: []byte{},
 		}
 
-		t.logger.Warn("detected a possible fault", zap.Any("", problem))
+		if err := t.sign(sm); err != nil {
+			t.logger.Error("failed to report a problem to the other guardians", zap.Error(err))
 
-		intoChannelOrDone(t.ctx, t.ftChans.tellProblem, problem)
+			return
+		}
+
+		echo := newEcho(sm, t.guardiansProtoIDs)
+
+		intoChannelOrDone[Sendable](t.ctx, t.messageOutChan, echo)
 
 		return
 	}

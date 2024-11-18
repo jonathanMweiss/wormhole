@@ -44,7 +44,9 @@ func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *
 
 	msg := &tsscommv1.Echo{
 		Message: &tsscommv1.SignedMessage{
-			Content:   &tsscommv1.TssContent{Payload: payload},
+			Content: &tsscommv1.SignedMessage_TssContent{
+				TssContent: &tsscommv1.TssContent{Payload: payload},
+			},
 			Sender:    partyIdToProto(t.Self),
 			Signature: nil,
 		},
@@ -248,7 +250,13 @@ func TestEquivocation(t *testing.T) {
 			a.False(shouldDeliver)
 
 			equvicatingEchoerMessage := parsedIntoEcho(a, e2, parsed1)
-			equvicatingEchoerMessage.Content.GetEcho().Message.Content.Payload[0] += 1
+			equvicatingEchoerMessage.
+				Content.
+				GetEcho().
+				Message.
+				Content.(*tsscommv1.SignedMessage_TssContent).
+				TssContent.
+				Payload[0] += 1
 			// now echoer is equivicating (change content, but of some seen message):
 			_, _, err = e1.relbroadcastInspection(parsed1, equvicatingEchoerMessage)
 			a.ErrorContains(err, e2.Self.Id)
@@ -412,8 +420,10 @@ func TestBadInputs(t *testing.T) {
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
 				Message: &tsscommv1.SignedMessage{
-					Content: &tsscommv1.TssContent{},
-					Sender:  partyIdToProto(e2.Self),
+					Content: &tsscommv1.SignedMessage_TssContent{
+						TssContent: &tsscommv1.TssContent{},
+					},
+					Sender: partyIdToProto(e2.Self),
 				},
 			}}},
 		})
@@ -422,8 +432,10 @@ func TestBadInputs(t *testing.T) {
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
 				Message: &tsscommv1.SignedMessage{
-					Content: &tsscommv1.TssContent{
-						Payload: []byte{1, 2, 3},
+					Content: &tsscommv1.SignedMessage_TssContent{
+						TssContent: &tsscommv1.TssContent{
+							Payload: []byte{1, 2, 3},
+						},
 					},
 					Sender: partyIdToProto(e2.Self),
 				},
@@ -434,8 +446,10 @@ func TestBadInputs(t *testing.T) {
 		err = e1.handleIncomingTssMessage(&IncomingMessage{Source: partyIdToProto(e2.Self), Content: &tsscommv1.PropagatedMessage{
 			Message: &tsscommv1.PropagatedMessage_Echo{Echo: &tsscommv1.Echo{
 				Message: &tsscommv1.SignedMessage{
-					Content: &tsscommv1.TssContent{
-						Payload: []byte{1, 2, 3},
+					Content: &tsscommv1.SignedMessage_TssContent{
+						TssContent: &tsscommv1.TssContent{
+							Payload: []byte{1, 2, 3},
+						},
 					},
 					Sender:    partyIdToProto(e2.Self),
 					Signature: []byte{1, 2, 3},
@@ -626,6 +640,9 @@ func TestE2E(t *testing.T) {
 }
 
 func TestFT(t *testing.T) {
+	// t.FailNow()
+	// return
+
 	a := assert.New(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*2)
@@ -711,7 +728,9 @@ func TestMessagesWithBadRounds(t *testing.T) {
 				Content: &tsscommv1.PropagatedMessage{Message: &tsscommv1.PropagatedMessage_Echo{
 					Echo: &tsscommv1.Echo{
 						Message: &tsscommv1.SignedMessage{
-							Content:   &tsscommv1.TssContent{Payload: bts},
+							Content: &tsscommv1.SignedMessage_TssContent{
+								TssContent: &tsscommv1.TssContent{Payload: bts},
+							},
 							Sender:    partyIdToProto(from),
 							Signature: nil,
 						},

@@ -170,6 +170,7 @@ var (
 	ErrSignedMessageIsNil    = fmt.Errorf("SignedMessage is nil")
 	ErrNoContent             = fmt.Errorf("SignedMessage doesn't contain a content")
 	ErrNilPayload            = fmt.Errorf("SignedMessage doesn't contain a payload")
+	ErrMissingTimestamp      = fmt.Errorf("Problem struct missing timestamp field")
 )
 
 func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
@@ -186,8 +187,19 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return fmt.Errorf("signedMessage sender pID error:%w", err)
 	}
 
-	if err := validateContentCorrectForm(m.Content); err != nil {
-		return fmt.Errorf("signedMessage content error:%w", err)
+	switch v := m.Content.(type) {
+	case *tsscommv1.SignedMessage_TssContent:
+		if err := validateContentCorrectForm(v.TssContent); err != nil {
+			return fmt.Errorf("signedMessage content error:%w", err)
+		}
+	case *tsscommv1.SignedMessage_Problem:
+		if err := validateProblemCorrectForm(v.Problem); err != nil {
+			return err
+		}
+	case nil:
+		return ErrNoContent
+	default:
+		return fmt.Errorf("unknown content type: %T", v)
 	}
 
 	if len(m.Signature) == 0 {
@@ -220,6 +232,18 @@ func validateContentCorrectForm(m *tsscommv1.TssContent) error {
 
 	if m.Payload == nil {
 		return ErrNilPayload
+	}
+
+	return nil
+}
+
+func validateProblemCorrectForm(p *tsscommv1.Problem) error {
+	if p == nil {
+		return ErrNoContent
+	}
+
+	if p.IssuingTime == nil {
+		return ErrMissingTimestamp
 	}
 
 	return nil
