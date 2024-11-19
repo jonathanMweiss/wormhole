@@ -7,6 +7,7 @@ import (
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/yossigi/tss-lib/v2/common"
+	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
 	"github.com/yossigi/tss-lib/v2/tss"
 	"go.uber.org/zap"
@@ -334,4 +335,21 @@ func outofChannelOrDone[T any](ctx context.Context, c chan T) (T, error) {
 	case <-ctx.Done():
 		return v, ctx.Err()
 	}
+}
+
+func (st *GuardianStorage) validateTrackingIDForm(tid *common.TrackingID) error {
+	if len(tid.Digest) != party.DigestSize {
+		return fmt.Errorf("trackingID digest is not in correct size")
+	}
+
+	// checking that the byte array is the correct size
+	if len(tid.PartiesState) < (len(st.Guardians)+7)/8 {
+		return fmt.Errorf("trackingID partiesState is too short")
+	}
+
+	if tid.AuxilaryData == nil {
+		// TODO: expecting auxilaryData to be set.
+	}
+
+	return nil
 }

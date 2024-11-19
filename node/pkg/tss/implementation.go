@@ -764,6 +764,10 @@ func (t *Engine) parseEcho(m Incoming) (parsedMsg, error) {
 			return parsed, errBadRoundsInEcho
 		}
 
+		if err := t.validateTrackingIDForm(parsed.getTrackingID()); err != nil {
+			return parsed, err
+		}
+
 		return parsed, nil
 	default:
 		return nil, fmt.Errorf("unknown content type: %T", cntnt)
@@ -836,6 +840,10 @@ func (t *Engine) parseUnicast(m Incoming) (parsedMsg, error) {
 	// only round 1 and round 2 are unicasts.
 	if rnd != round1Message1 && rnd != round2Message {
 		return parsed, errUnicastBadRound
+	}
+
+	if err := t.validateTrackingIDForm(parsed.getTrackingID()); err != nil {
+		return parsed, err
 	}
 
 	return parsed, nil
