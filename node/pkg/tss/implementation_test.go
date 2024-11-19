@@ -37,6 +37,11 @@ var (
 
 	allRounds = append(unicastRounds, broadcastRounds...)
 )
+var supctx context.Context
+
+func init() {
+	supctx = testutils.MakeSupervisorContext(context.Background())
+}
 
 func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *IncomingMessage {
 	payload, _, err := parsed.WireBytes()
@@ -268,6 +273,12 @@ func TestEquivocation(t *testing.T) {
 		engines := load5GuardiansSetupForBroadcastChecks(a)
 		e1, e2 := engines[0], engines[1]
 
+		ctx, cncl := context.WithCancel(supctx)
+		defer cncl()
+
+		e1.Start(ctx)
+		e2.Start(ctx)
+
 		for i, rndType := range unicastRounds {
 
 			trackingId := party.Digest{byte(i)}
@@ -309,9 +320,9 @@ func TestBadInputs(t *testing.T) {
 	engines := load5GuardiansSetupForBroadcastChecks(a)
 	e1, e2 := engines[0], engines[1]
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
+	ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 	defer cancel()
-	ctx = testutils.MakeSupervisorContext(ctx)
+
 	e1.Start(ctx) // so it has a logger.
 
 	t.Run("signature", func(t *testing.T) {
@@ -557,10 +568,10 @@ func TestRouteCheck(t *testing.T) {
 	engines := load5GuardiansSetupForBroadcastChecks(a)
 	e1 := engines[0]
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(supctx, time.Second*5)
 	defer cancel()
 
-	e1.Start(testutils.MakeSupervisorContext(ctx))
+	e1.Start(ctx)
 	e1.fpOutChan <- &badtssMessage{}
 	e1.fpErrChannel <- tss.NewTrackableError(errors.New("test"), "test", -1, nil, &tsscommon.TrackingID{})
 	e1.fpErrChannel <- nil
@@ -581,9 +592,8 @@ func TestE2E(t *testing.T) {
 
 	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
+	ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 	defer cancel()
-	ctx = testutils.MakeSupervisorContext(ctx)
 
 	fmt.Println("starting engines.")
 	for _, engine := range engines {
@@ -640,14 +650,13 @@ func TestE2E(t *testing.T) {
 }
 
 func TestFT(t *testing.T) {
-	t.FailNow()
-	return
+	// t.FailNow()
+	// return
 
 	a := assert.New(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*2)
+	ctx, cancel := context.WithTimeout(supctx, time.Minute*2)
 	defer cancel()
-	ctx = testutils.MakeSupervisorContext(ctx)
 
 	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
@@ -949,10 +958,8 @@ func broadcast(chns map[string]chan msgg, engine *Engine, m Sendable) {
 func TestSigCounter(t *testing.T) {
 	a := assert.New(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
+	ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 	defer cancel()
-
-	ctx = testutils.MakeSupervisorContext(ctx)
 
 	t.Run("MaxCountBlockAdditionalUpdates", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
