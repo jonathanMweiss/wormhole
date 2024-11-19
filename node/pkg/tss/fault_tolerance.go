@@ -44,6 +44,8 @@ func (d *deliveryCommand) ftCmd() {}
 
 type inactives struct {
 	partyIDs []*tss.PartyID
+
+	downtimeEnding []*tss.PartyID
 }
 
 // Used to know which guardians aren't to be used in the protocol for specific chainID.
@@ -53,6 +55,11 @@ type getInactiveGuardiansCommand struct {
 }
 
 func (g *getInactiveGuardiansCommand) ftCmd() {}
+
+type trackIDSigRelatedData struct {
+	sawProtocolMessagesFrom map[strPartyId]bool
+	committeeMembers        []strPartyId
+}
 
 // this signature structs are held by two different data structures.
 // 1. a map so we can access and update these easily.
@@ -68,7 +75,7 @@ type signatureState struct {
 	// each trackingId is a unique attempt to sign a message.
 	// Once one of the trackidStr saw f+1 guardians and we haven't seent the digest yet, we can assume
 	// we are behind the network and we should inform the others.
-	sawProtocolMessagesFrom map[trackidStr]map[strPartyId]bool
+	trackidRelatedData map[trackidStr]*trackIDSigRelatedData
 
 	alertTime time.Time
 
@@ -80,19 +87,32 @@ func (s *signatureState) GetEndTime() time.Time {
 	return s.alertTime
 }
 
+type ftChainData struct {
+	timeToRevive time.Time // the time this party is expected to come back and be part of the protocol again.
+	// sigs that once the revive time expire should be retried.
+	retrySigs                   map[party.Digest]*signatureState
+	liveSigsWaitingForThisParty map[party.Digest]*signatureState
+}
+
 // Describes a specfic party's data in terms of fault tolerance.
-type ftPartyData struct {
-	partyID            *tss.PartyID
-	timeToRevive       map[vaa.ChainID]time.Time // the time this party is expected to come back and be part of the protocol again.
-	sigsUnderThisParty map[party.Digest]*signatureState
+type ftParty struct {
+	partyID     *tss.PartyID
+	ftPartyData map[vaa.ChainID]*ftChainData
 }
 
 type ftTracker struct {
 	sigAlerts internal.Ttlheap[*signatureState]
 	sigsState map[party.Digest]*signatureState
 	// for starters, we assume any fault is on all chains.
-	membersData map[strPartyId]ftPartyData
-	// reviveTimer   internal.Ttlheap[TODO:] // used to tell when someone can join the protocol again
+	membersData map[strPartyId]*ftParty
+}
+
+func newEmptyChainData() *ftChainData {
+	return &ftChainData{
+		timeToRevive:                time.Now(),
+		retrySigs:                   map[party.Digest]*signatureState{},
+		liveSigsWaitingForThisParty: map[party.Digest]*signatureState{},
+	}
 }
 
 // a single threaded env, that inspects incoming signatures request, message deliveries etc.
@@ -100,14 +120,14 @@ func (t *Engine) ftTracker() {
 	f := &ftTracker{
 		sigAlerts:   internal.NewTtlHeap[*signatureState](),
 		sigsState:   make(map[party.Digest]*signatureState),
-		membersData: make(map[strPartyId]ftPartyData),
+		membersData: make(map[strPartyId]*ftParty),
 	}
 
 	for _, pid := range t.GuardianStorage.Guardians {
 		strPid := strPartyId(partyIdToString(pid))
-		f.membersData[strPid] = ftPartyData{
-			timeToRevive:       map[vaa.ChainID]time.Time{},
-			sigsUnderThisParty: map[party.Digest]*signatureState{},
+		f.membersData[strPid] = &ftParty{
+			partyID:     pid,
+			ftPartyData: map[vaa.ChainID]*ftChainData{},
 		}
 	}
 
@@ -133,9 +153,28 @@ func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
 	case *getInactiveGuardiansCommand:
 		f.executeGetIncativeGuardiansCommand(t, c)
 	case *parsedProblem:
-		panic("YAS!")
+		f.executeParsedProblemCommand(t, c)
 	default:
 		t.logger.Error("received unknown command type", zap.Any("cmd", cmd))
+	}
+}
+
+func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
+	m := f.membersData[strPartyId(partyIdToString(protoToPartyId(cmd.issuer)))]
+
+	reviveTime := time.Now().Add(t.GuardianStorage.GuardianSigningDownTime)
+	chainID := vaa.ChainID(cmd.ChainID)
+	// TODO: insert into a timer heap to retry messages in the vicinity of this time.
+	chainData, ok := m.ftPartyData[chainID]
+	if !ok {
+		chainData = newEmptyChainData()
+		m.ftPartyData[chainID] = chainData
+	}
+
+	// we update the revival time only if the revival time had passed
+	if time.Now().After(chainData.timeToRevive) {
+		chainData.timeToRevive = reviveTime
+		// TODO: insert to some timed heap
 	}
 }
 
@@ -147,9 +186,18 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 
 	reply := inactives{}
 	for _, m := range f.membersData {
-		t, ok := m.timeToRevive[cmd.ChainID]
-		if ok && t.After(time.Now()) { // TODO: maybe add some buffer time here. + support more than one attemp
+		chainData, ok := m.ftPartyData[cmd.ChainID]
+		if !ok {
+			chainData = newEmptyChainData()
+			m.ftPartyData[cmd.ChainID] = chainData
+		}
+
+		if chainData.timeToRevive.After(time.Now()) {
 			reply.partyIDs = append(reply.partyIDs, m.partyID)
+		}
+
+		if chainData.timeToRevive.Before(time.Now().Add(time.Second * 10)) {
+			reply.downtimeEnding = append(reply.downtimeEnding, m.partyID)
 		}
 	}
 
@@ -176,14 +224,31 @@ func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
 		state = &signatureState{
 			chain: extractChainIDFromTrackingID(tid),
 
-			sawProtocolMessagesFrom: map[trackidStr]map[strPartyId]bool{},
-			alertTime:               time.Now(),
-			beginTime:               time.Now(),
+			trackidRelatedData: map[trackidStr]*trackIDSigRelatedData{},
+			alertTime:          time.Now(),
+			beginTime:          time.Now(),
 		}
 		f.sigsState[dgst] = state
 	}
 
 	state.approvedToSign = true
+
+	for _, pid := range cmd.SigningInfo.SigningCommittee {
+		m, ok := f.membersData[strPartyId(partyIdToString(pid))]
+		if !ok {
+			t.logger.Error("signCommand: party not found in the members data")
+
+			continue
+		}
+
+		chainData, ok := m.ftPartyData[state.chain]
+		if !ok {
+			chainData = newEmptyChainData()
+			m.ftPartyData[state.chain] = chainData
+		}
+
+		chainData.liveSigsWaitingForThisParty[dgst] = state
+	}
 }
 
 func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
@@ -206,11 +271,11 @@ func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
 	if !ok {
 		// create a sig state.
 		state = &signatureState{
-			chain:                   extractChainIDFromTrackingID(tid),
-			approvedToSign:          false,
-			sawProtocolMessagesFrom: map[trackidStr]map[strPartyId]bool{},
-			alertTime:               time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
-			beginTime:               time.Now(),
+			chain:              extractChainIDFromTrackingID(tid),
+			approvedToSign:     false,
+			trackidRelatedData: map[trackidStr]*trackIDSigRelatedData{},
+			alertTime:          time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
+			beginTime:          time.Now(),
 		}
 		f.sigsState[dgst] = state
 
@@ -218,13 +283,17 @@ func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
 		f.sigAlerts.Enqueue(state)
 	}
 
-	votes, ok := state.sawProtocolMessagesFrom[trackidStr(tid.ToString())]
+	tidData, ok := state.trackidRelatedData[trackidStr(tid.ToString())]
 	if !ok {
-		votes = map[strPartyId]bool{}
-		state.sawProtocolMessagesFrom[trackidStr(tid.ToString())] = votes
+		tidData = &trackIDSigRelatedData{
+			sawProtocolMessagesFrom: map[strPartyId]bool{},
+			committeeMembers:        []strPartyId{},
+		}
+
+		state.trackidRelatedData[trackidStr(tid.ToString())] = tidData
 	}
 
-	votes[strPartyId(partyIdToString(cmd.from))] = true
+	tidData.sawProtocolMessagesFrom[strPartyId(partyIdToString(cmd.from))] = true
 }
 
 func extractChainIDFromTrackingID(tid *common.TrackingID) vaa.ChainID {
@@ -275,11 +344,12 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 	f.sigAlerts.Enqueue(sigState)
 }
 
+// get the maximal amount of guardians that saw the digest and started signing.
 func (s *signatureState) maxGuardianVotes() int {
 	max := 0
-	for _, uniqueVoters := range s.sawProtocolMessagesFrom {
-		if len(uniqueVoters) > max {
-			max = len(uniqueVoters)
+	for _, tidData := range s.trackidRelatedData {
+		if len(tidData.sawProtocolMessagesFrom) > max {
+			max = len(tidData.sawProtocolMessagesFrom)
 		}
 	}
 
