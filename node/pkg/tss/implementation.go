@@ -65,10 +65,22 @@ type Engine struct {
 
 type PEM []byte
 
+// Contains the TSS related configurations.
+type Configurations struct {
+	MaxSimultaneousSignatures int
+	// MaxSignerTTL is the maximum time a signature is allowed to be active.
+	// used to release resources.
+	MaxSignerTTL            time.Duration
+	MaxSigStartWaitTime     time.Duration // time to wait for a signature to start before thinking the blockchain node of the guardian is faulty.
+	GuardianSigningDownTime time.Duration // once a guardian is marked as faulty, this is the time it isn't allowed into the protocol.
+}
+
 // GuardianStorage is a struct that holds the data needed for a guardian to participate in the TSS protocol
 // including its signing key, and the shared symmetric keys with other guardians.
 // should be loaded from a file.
 type GuardianStorage struct {
+	Configurations
+
 	Self *tss.PartyID
 
 	// should be a certificate generated with SecretKey
@@ -96,12 +108,6 @@ type GuardianStorage struct {
 	guardiansProtoIDs []*tsscommv1.PartyId
 	guardianToCert    map[string]*x509.Certificate
 	pemkeyToGuardian  map[string]*tss.PartyID
-
-	MaxSimultaneousSignatures int
-	// MaxSignerTTL is the maximum time a signer is allowed to be active.
-	// used to release resources.
-	MaxSignerTTL        time.Duration
-	MaxSigStartWaitTime time.Duration // time to wait for a signature to start before thinking the blockchain node of the guardian is faulty.
 }
 
 func (g *GuardianStorage) contains(pid *tss.PartyID) bool {
@@ -271,6 +277,10 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 
 	if storage.MaxSigStartWaitTime == 0 {
 		storage.MaxSigStartWaitTime = defaultMaxSigStartWaitTime
+	}
+
+	if storage.GuardianSigningDownTime == 0 {
+		storage.GuardianSigningDownTime = defaultGuardianSigningDownTime
 	}
 
 	fpParams := &party.Parameters{

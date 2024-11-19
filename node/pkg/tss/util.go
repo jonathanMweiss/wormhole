@@ -347,9 +347,7 @@ func (st *GuardianStorage) validateTrackingIDForm(tid *common.TrackingID) error 
 		return fmt.Errorf("trackingID partiesState is too short")
 	}
 
-	if tid.AuxilaryData == nil {
-		// TODO: expecting auxilaryData to be set.
-	}
+	// TODO: expecting auxilaryData to be set.
 
 	return nil
 }

@@ -314,6 +314,11 @@ func (player *dkgSetupPlayer) handleKeygenEndMessage(m *keygen.LocalPartySaveDat
 		LoadDistributionKey:   player.LoadDistributionKey,
 		signingKey:            &ecdsa.PrivateKey{},
 
-		MaxSimultaneousSignatures: defaultMaxLiveSignatures,
+		Configurations: Configurations{
+			MaxSimultaneousSignatures: defaultMaxLiveSignatures,
+			MaxSignerTTL:              defaultMaxSignerTTL,
+			MaxSigStartWaitTime:       defaultMaxSigStartWaitTime,
+			GuardianSigningDownTime:   defaultGuardianSigningDownTime,
+		},
 	}
 }
