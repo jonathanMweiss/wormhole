@@ -650,8 +650,8 @@ func TestE2E(t *testing.T) {
 }
 
 func TestFT(t *testing.T) {
-	// t.FailNow()
-	// return
+	t.FailNow()
+	return
 
 	a := assert.New(t)
 
@@ -761,9 +761,14 @@ func generateFakeParsedMessageWithRandomContent(from, to *tss.PartyID, rnd signi
 
 // if to == nil it's a broadcast message.
 func generateFakeMessageWithRandomContent(from, to *tss.PartyID, rnd signingRound, digest party.Digest) tss.ParsedMessage {
+	partiesState := make([]byte, maxParties)
+	for i := 0; i < maxParties; i++ {
+		partiesState[i] = 255
+	}
+
 	trackingId := &tsscommon.TrackingID{
 		Digest:       digest[:],
-		PartiesState: []byte{},
+		PartiesState: partiesState,
 		AuxilaryData: []byte{},
 	}
 
@@ -1008,7 +1013,7 @@ func TestSigCounter(t *testing.T) {
 		a.NoError(err)
 
 		// test:
-		a.Len(e1.sigCounter.digestToGuardians, 1)
+		a.Equal(e1.sigCounter.digestToGuardiansLen(), 1)
 		select {
 		case e1.fpErrChannel <- tss.NewTrackableError(fmt.Errorf("dummyerr"), "de", -1, e1.Self, parsed.getTrackingID()):
 		case <-time.After(time.Second * 1):
@@ -1018,7 +1023,7 @@ func TestSigCounter(t *testing.T) {
 
 		time.Sleep(time.Millisecond * 500)
 
-		a.Len(e1.sigCounter.digestToGuardians, 0)
+		a.Equal(e1.sigCounter.digestToGuardiansLen(), 0)
 	})
 
 	t.Run("sigDoneReduceCount", func(t *testing.T) {
@@ -1043,7 +1048,7 @@ func TestSigCounter(t *testing.T) {
 		a.NoError(err)
 
 		// test:
-		a.Len(e1.sigCounter.digestToGuardians, 1)
+		a.Equal(e1.sigCounter.digestToGuardiansLen(), 1)
 		e1.fpSigOutChan <- &tsscommon.SignatureData{
 			Signature:         []byte{},
 			SignatureRecovery: []byte{},
@@ -1053,7 +1058,7 @@ func TestSigCounter(t *testing.T) {
 			TrackingId:        parsed.getTrackingID(),
 		}
 		time.Sleep(time.Millisecond * 500)
-		a.Len(e1.sigCounter.digestToGuardians, 0)
+		a.Equal(e1.sigCounter.digestToGuardiansLen(), 0)
 	})
 
 	t.Run("CanHaveSimulSigners", func(t *testing.T) {

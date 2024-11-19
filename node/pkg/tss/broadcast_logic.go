@@ -1,11 +1,14 @@
 package tss
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
+	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	"github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/tss"
 )
@@ -29,7 +32,51 @@ type parsedMsg interface {
 	getTrackingID() *common.TrackingID // can be nil too.
 }
 
-type parsedProblem struct{ *tsscommv1.Problem }
+type parsedProblem struct {
+	*tsscommv1.Problem
+	issuer *tsscommv1.PartyId
+}
+
+// Ensures the parsedProblem implements the ftCommand interface.
+func (p *parsedProblem) ftCmd() {}
+
+const parsedProblemDomain = "tssProblemDomainSeperator"
+const parsedProblemDomainlen = len(parsedProblemDomain)
+
+func (p *parsedProblem) getTrackingID() *common.TrackingID {
+	return nil
+	// dgst, _ := p.getUUID(nil)
+
+	// return &common.TrackingID{
+	// 	Digest:       dgst[:],
+	// 	PartiesState: []byte{},
+	// 	AuxilaryData: []byte(parsedProblemDomain), // ensures this has specific auxilary data.
+	// }
+}
+
+func (p *parsedProblem) wrapError(err error) error {
+	return logableError{
+		cause:      fmt.Errorf("error parsing problem, issuer %v: %w", p.issuer, err),
+		trackingId: nil, // TODO: this trackingID doesn't make sense to no one, should we use it here?
+		round:      "",
+	}
+}
+
+func (p *parsedProblem) getUUID(distLoadKey []byte) (uuid, error) {
+	b := bytes.NewBuffer(make([]byte, 0, 4+4+8+32+parsedProblemDomainlen)) // space for each of the values
+
+	b.WriteString(parsedProblemDomain) // domain separation.
+
+	b.Write(distLoadKey)
+
+	vaa.MustWrite(b, binary.BigEndian, p.ChainID)
+	vaa.MustWrite(b, binary.BigEndian, p.Emitter)
+	vaa.MustWrite(b, binary.BigEndian, p.IssuingTime.AsTime().Unix())
+
+	b.WriteString(partyIdToString(protoToPartyId(p.issuer)))
+
+	return uuid(hash(b.Bytes())), nil
+}
 
 type parsedTsscontent struct {
 	tss.ParsedMessage

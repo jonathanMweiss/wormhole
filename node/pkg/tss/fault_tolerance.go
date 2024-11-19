@@ -34,13 +34,6 @@ type signCommand struct {
 // supporting the ftCmd interface
 func (s *signCommand) ftCmd() {}
 
-type sigDoneCommand struct {
-	Digest  party.Digest
-	trackId []byte
-}
-
-func (s *sigDoneCommand) ftCmd() {}
-
 type deliveryCommand struct {
 	parsedMsg tss.Message
 	from      *tss.PartyID
@@ -60,18 +53,6 @@ type getInactiveGuardiansCommand struct {
 }
 
 func (g *getInactiveGuardiansCommand) ftCmd() {}
-
-type ftChans struct {
-	tellCmd chan ftCommand
-	//removeTrackID chan []byte//  TODO: make part of cmd: //  // the engine might request to clean trackIDs related to the reliable-broadcast.
-
-	// Used to tell the tracker on a faulty node.
-	tellProblem chan Problem
-}
-
-type Problem struct {
-	tsscommv1.Problem
-}
 
 // this signature structs are held by two different data structures.
 // 1. a map so we can access and update these easily.
@@ -135,7 +116,7 @@ func (t *Engine) ftTracker() {
 		case <-t.ctx.Done():
 			return
 
-		case cmd := <-t.ftChans.tellCmd:
+		case cmd := <-t.ftCommandChan:
 			f.executeCommand(t, cmd)
 		case <-f.sigAlerts.WaitOnTimer():
 			f.inspectAlertHeapsTop(t)
@@ -151,6 +132,8 @@ func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
 		f.executeDeliveryCommand(t, c)
 	case *getInactiveGuardiansCommand:
 		f.executeGetIncativeGuardiansCommand(t, c)
+	case *parsedProblem:
+		panic("YAS!")
 	default:
 		t.logger.Error("received unknown command type", zap.Any("cmd", cmd))
 	}

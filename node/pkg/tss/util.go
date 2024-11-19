@@ -91,6 +91,12 @@ func (c *activeSigCounter) remove(trackid *common.TrackingID) {
 		delete(c.guardianToDigests[g], strDigest(trackid.Digest))
 	}
 }
+func (c *activeSigCounter) digestToGuardiansLen() int {
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
+
+	return len(c.digestToGuardians)
+}
 
 func (l logableError) Error() string {
 	if l.cause == nil {
@@ -170,7 +176,7 @@ var (
 	ErrSignedMessageIsNil    = fmt.Errorf("SignedMessage is nil")
 	ErrNoContent             = fmt.Errorf("SignedMessage doesn't contain a content")
 	ErrNilPayload            = fmt.Errorf("SignedMessage doesn't contain a payload")
-	ErrMissingTimestamp      = fmt.Errorf("Problem struct missing timestamp field")
+	ErrMissingTimestamp      = fmt.Errorf("problem struct missing timestamp field")
 )
 
 func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {

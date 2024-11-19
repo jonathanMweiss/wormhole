@@ -60,7 +60,7 @@ type Engine struct {
 	//
 	// If the guardian attempted to sign previously, but wasn't part of the comittee, on some cases might change this case and add this
 	// guardian to the committee.
-	ftChans
+	ftCommandChan chan ftCommand
 }
 
 type PEM []byte
@@ -228,7 +228,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		reply: make(chan inactives, 1),
 	}
 
-	if err := intoChannelOrDone[ftCommand](t.ctx, t.ftChans.tellCmd, &cmd); err != nil {
+	if err := intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &cmd); err != nil {
 		return fmt.Errorf("failed to request for inactive guardians: %w", err)
 	}
 
@@ -247,9 +247,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		return err
 	}
 
-	t.ftChans.tellCmd <- &signCommand{
-		SigningInfo: info,
-	}
+	intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &signCommand{SigningInfo: info})
 
 	if info.IsSigner {
 		inProgressSigs.Inc()
@@ -290,16 +288,17 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		return nil, err
 	}
 
+	expectedMsgs := storage.MaxSimultaneousSignatures *
+		(numBroadcastsPerSignature + numUnicastsRounds*storage.Threshold)
 	t := &Engine{
 		ctx: nil,
 
 		logger:          &zap.Logger{},
 		GuardianStorage: *storage,
 
-		fpParams: fpParams,
-		fp:       fp,
-		fpOutChan: make(chan tss.Message, storage.MaxSimultaneousSignatures*
-			(numBroadcastsPerSignature+numUnicastsRounds*storage.Threshold)),
+		fpParams:     fpParams,
+		fp:           fp,
+		fpOutChan:    make(chan tss.Message, expectedMsgs),
 		fpSigOutChan: make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
 		sigOutChan:   make(chan *common.SignatureData, storage.MaxSimultaneousSignatures),
 
@@ -312,11 +311,8 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		started: atomic.Uint32{}, // default value is 0
 
 		sigCounter: newSigCounter(),
-	}
 
-	t.ftChans = ftChans{
-		tellCmd:     make(chan ftCommand, cap(t.fpOutChan)),
-		tellProblem: make(chan Problem),
+		ftCommandChan: make(chan ftCommand, expectedMsgs),
 	}
 
 	return t, nil
@@ -604,7 +600,6 @@ var errBadRoundsInEcho = fmt.Errorf("cannot receive echos for rounds: %v,%v", ro
 func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	parsed, err := t.parseEcho(m)
 	if err != nil {
-		err = fmt.Errorf("couldn't parse echo payload: %w", err)
 		if parsed != nil {
 			err = parsed.wrapError(err)
 		}
@@ -620,14 +615,15 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	if !shouldDeliver {
 		return shouldEcho, nil
 	}
+
 	switch v := parsed.(type) {
+	case *parsedProblem:
+		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, v) // received delivery status.
 	case *parsedTsscontent:
 		deliveredMsgCntr.Inc()
 		if err := t.feedIncomingToFp(v.ParsedMessage); err != nil {
 			return shouldEcho, parsed.wrapError(fmt.Errorf("failed to update the full party: %w", err))
 		}
-	default:
-		panic("Not implemented.")
 	}
 
 	return shouldEcho, nil
@@ -641,10 +637,10 @@ func (t *Engine) feedIncomingToFp(parsed tss.ParsedMessage) error {
 	if ok := t.sigCounter.add(trackId, from, maxLiveSignatures); ok {
 		// TODO: Should I update that a delivery was made even if sigCounter blocked it?
 
-		t.ftChans.tellCmd <- &deliveryCommand{
+		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &deliveryCommand{
 			parsedMsg: parsed,
 			from:      from,
-		}
+		})
 
 		return t.fp.Update(parsed)
 	}
@@ -731,43 +727,47 @@ var (
 )
 
 func (t *Engine) parseEcho(m Incoming) (parsedMsg, error) {
-	parsed := &parsedTsscontent{nil, ""}
-
 	echoMsg := m.toEcho()
 	if err := vaidateEchoCorrectForm(echoMsg); err != nil {
-		return parsed, err
+		return nil, err
 	}
 
 	senderPid := protoToPartyId(echoMsg.Message.Sender)
 	if !t.GuardianStorage.contains(senderPid) {
-		return parsed, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
+		return nil, fmt.Errorf("%w: %v", ErrUnkownSender, senderPid)
 	}
 
-	cntnt, ok := echoMsg.Message.Content.(*tsscommv1.SignedMessage_TssContent)
-	if !ok {
-		return parsed, fmt.Errorf("can't parse non TSS content in to TSS message")
+	switch cntnt := echoMsg.Message.Content.(type) {
+	case *tsscommv1.SignedMessage_Problem:
+		return &parsedProblem{
+			Problem: cntnt.Problem,
+			issuer:  echoMsg.Message.Sender,
+		}, nil
+
+	case *tsscommv1.SignedMessage_TssContent:
+		p, err := tss.ParseWireMessage(cntnt.TssContent.Payload, senderPid, true)
+		if err != nil {
+			return nil, err
+		}
+
+		parsed := &parsedTsscontent{p, ""}
+
+		rnd, err := getRound(parsed)
+		if err != nil {
+			return parsed, fmt.Errorf("couldn't extract round from echo: %w", err)
+		}
+
+		parsed.signingRound = rnd
+
+		// according to gg18 (tss ecdsa paper), unicasts are sent in these rounds.
+		if rnd == round1Message1 || rnd == round2Message {
+			return parsed, errBadRoundsInEcho
+		}
+
+		return parsed, nil
+	default:
+		return nil, fmt.Errorf("unknown content type: %T", cntnt)
 	}
-
-	p, err := tss.ParseWireMessage(cntnt.TssContent.Payload, senderPid, true)
-	if err != nil {
-		return nil, err
-	}
-
-	parsed.ParsedMessage = p
-
-	rnd, err := getRound(parsed)
-	if err != nil {
-		return parsed, fmt.Errorf("couldn't extract round from echo: %w", err)
-	}
-
-	parsed.signingRound = rnd
-
-	// according to gg18 (tss ecdsa paper), unicasts are sent in these rounds.
-	if rnd == round1Message1 || rnd == round2Message {
-		return parsed, errBadRoundsInEcho
-	}
-
-	return parsed, nil
 }
 
 // SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.
