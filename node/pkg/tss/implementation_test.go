@@ -585,68 +585,114 @@ func TestE2E(t *testing.T) {
 	// all will attempt to sign a single message, while outputing messages to each other,
 	// and reliably broadcasting them.
 
-	inProgressSigs.Set(0) // reseting the gauge.
+	t.Run("with correct metrics", func(t *testing.T) {
+		inProgressSigs.Set(0) // reseting the gauge.
 
-	a := assert.New(t)
-	engines := loadGuardians(a)
+		a := assert.New(t)
+		engines := loadGuardians(a)
 
-	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
-	ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
-	defer cancel()
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
 
-	fmt.Println("starting engines.")
-	for _, engine := range engines {
-		a.NoError(engine.Start(ctx))
-	}
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
+		}
 
-	fmt.Println("msgHandler settup:")
-	dnchn := msgHandler(ctx, engines)
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, 1)
 
-	fmt.Println("engines started, requesting sigs")
+		fmt.Println("engines started, requesting sigs")
 
-	m := dto.Metric{}
-	inProgressSigs.Write(&m)
-	a.Equal(0, int(m.Gauge.GetValue()))
+		m := dto.Metric{}
+		inProgressSigs.Write(&m)
+		a.Equal(0, int(m.Gauge.GetValue()))
 
-	// all engines are started, now we can begin the protocol.
-	for _, engine := range engines {
-		tmp := make([]byte, 32)
-		copy(tmp, dgst[:])
-		engine.BeginAsyncThresholdSigningProtocol(tmp)
-	}
+		// all engines are started, now we can begin the protocol.
+		for _, engine := range engines {
+			tmp := make([]byte, 32)
+			copy(tmp, dgst[:])
+			engine.BeginAsyncThresholdSigningProtocol(tmp)
+		}
 
-	inProgressSigs.Write(&m)
-	a.Equal(engines[0].Threshold+1, int(m.Gauge.GetValue()))
+		inProgressSigs.Write(&m)
+		a.Equal(engines[0].Threshold+1, int(m.Gauge.GetValue()))
 
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("%s", "context expired")
+		}
+
+		time.Sleep(time.Millisecond * 500) // ensuring all other engines have finished and not just one of them.
+		inProgressSigs.Write(&m)
+		a.Equal(0, int(m.Gauge.GetValue())) // ensuring nothing is in progress.
+
+		sigProducedCntr.Write(&m)
+		a.Equal(engines[0].Threshold+1, int(m.Counter.GetValue()))
+
+		sentMsgCntr.Write(&m)
+		committeeSize := engines[0].Threshold + 1
+		numBroadcastRounds := 8
+		numUnicastRounds := 2
+		numUnicastSendRequestsPerGuardian := engines[0].Threshold * numUnicastRounds
+		a.Equal(committeeSize*(numBroadcastRounds+numUnicastSendRequestsPerGuardian), int(m.Counter.GetValue()))
+
+		receivedMsgCntr.Write(&m)
+		// n^2 * (numBroadcastRounds + numUnicastRounds)
+		a.Greater(int(m.Counter.GetValue()), committeeSize*committeeSize*(numBroadcastRounds+numUnicastRounds))
+
+		deliveredMsgCntr.Write(&m)
+		// messages from committeeSize are delivered numBroadcastRounds times by each guardian.
+		a.Equal(committeeSize*numBroadcastRounds*len(engines), int(m.Counter.GetValue()))
+	})
+
+	t.Run("with 5 sigs", func(t *testing.T) {
+		a := assert.New(t)
+		engines := loadGuardians(a)
+
+		digests := make([]party.Digest, 5)
+		for i := 0; i < 5; i++ {
+			digests[i] = party.Digest{byte(i)}
+		}
+
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
+
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
+		}
+
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, len(digests))
+
+		fmt.Println("engines started, requesting sigs")
+
+		// all engines are started, now we can begin the protocol.
+		for _, d := range digests {
+
+			for _, engine := range engines {
+				tmp := make([]byte, 32)
+				copy(tmp, d[:])
+
+				engine.BeginAsyncThresholdSigningProtocol(tmp)
+			}
+		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("%s", "context expired")
+		}
+	})
+}
+
+func ctxExpiredFirst(ctx context.Context, ch chan struct{}) bool {
 	select {
-	case <-dnchn:
 	case <-ctx.Done():
-		t.FailNow()
-		return
+		return true
+	case <-ch:
+		return false
 	}
-
-	time.Sleep(time.Millisecond * 500) // ensuring all other engines have finished and not just one of them.
-	inProgressSigs.Write(&m)
-	a.Equal(0, int(m.Gauge.GetValue())) // ensuring nothing is in progress.
-
-	sigProducedCntr.Write(&m)
-	a.Equal(engines[0].Threshold+1, int(m.Counter.GetValue()))
-
-	sentMsgCntr.Write(&m)
-	committeeSize := engines[0].Threshold + 1
-	numBroadcastRounds := 8
-	numUnicastRounds := 2
-	numUnicastSendRequestsPerGuardian := engines[0].Threshold * numUnicastRounds
-	a.Equal(committeeSize*(numBroadcastRounds+numUnicastSendRequestsPerGuardian), int(m.Counter.GetValue()))
-
-	receivedMsgCntr.Write(&m)
-	// n^2 * (numBroadcastRounds + numUnicastRounds)
-	a.Greater(int(m.Counter.GetValue()), committeeSize*committeeSize*(numBroadcastRounds+numUnicastRounds))
-
-	deliveredMsgCntr.Write(&m)
-	// messages from committeeSize are delivered numBroadcastRounds times by each guardian.
-	a.Equal(committeeSize*numBroadcastRounds*len(engines), int(m.Counter.GetValue()))
 }
 
 func TestFT(t *testing.T) {
@@ -667,7 +713,7 @@ func TestFT(t *testing.T) {
 	}
 
 	fmt.Println("msgHandler settup:")
-	dnchn := msgHandler(ctx, engines)
+	dnchn := msgHandler(ctx, engines, 1)
 
 	fmt.Println("engines started, requesting sigs")
 
@@ -690,11 +736,8 @@ func TestFT(t *testing.T) {
 		engine.BeginAsyncThresholdSigningProtocol(tmp)
 	}
 
-	select {
-	case <-dnchn:
-	case <-ctx.Done():
-		t.FailNow()
-		return
+	if ctxExpiredFirst(ctx, dnchn) {
+		a.FailNowf("%s", "context expired")
 	}
 }
 
@@ -861,7 +904,7 @@ type msgg struct {
 	Sendable
 }
 
-func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
+func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int) chan struct{} {
 	signalSuccess := make(chan struct{})
 	once := sync.Once{}
 
@@ -899,6 +942,7 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 
 			//  Listener, responsible to receive output of engine, and direct it to the other engines.
 			go func() {
+				nmsigs := map[digest]struct{}{}
 				defer wg.Done()
 				for {
 					select {
@@ -924,6 +968,11 @@ func msgHandler(ctx context.Context, engines []*Engine) chan struct{} {
 						// check that the recovered address equals the provided address
 						if addr != address {
 							panic("recovered address does not match provided address")
+						}
+						nmsigs[digest(sig.TrackingId.Digest)] = struct{}{}
+
+						if len(nmsigs) < numDiffSigsExpected {
+							continue
 						}
 
 						once.Do(func() {
