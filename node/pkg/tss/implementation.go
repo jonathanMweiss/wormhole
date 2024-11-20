@@ -238,28 +238,34 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		return fmt.Errorf("failed to request for inactive guardians: %w", err)
 	}
 
+	// waiting for the reply.
 	inactiveParties, err := outofChannelOrDone(t.ctx, cmd.reply)
 	if err != nil {
 		return fmt.Errorf("failed to get inactive guardians: %w", err)
 	}
 
-	info, err := t.fp.AsyncRequestNewSignature(party.SigningTask{
-		Digest:       d,
-		Faulties:     inactiveParties.partyIDs,
-		AuxilaryData: []byte{}, // TODO
-	})
-	if err != nil {
-		// TODO: should i tell that the guardian started even on failure?
-		return err
+	// adding nil to the list of parties to ensure we run once without changing the faulties
+	for _, reviving := range append([]*tss.PartyID{nil}, inactiveParties.partyIDs...) {
+		info, err := t.fp.AsyncRequestNewSignature(party.SigningTask{
+			Digest: d,
+			// indicating the reviving guardian will be given a chance to join the protocol.
+			Faulties:     inactiveParties.getFaultiesWithout(reviving),
+			AuxilaryData: []byte{}, // TODO
+		})
+
+		if err != nil {
+			// TODO: should i tell that the guardian started even on failure?
+			return err
+		}
+
+		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &signCommand{SigningInfo: info})
+
+		if info.IsSigner {
+			inProgressSigs.Inc()
+		}
 	}
 
-	intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &signCommand{SigningInfo: info})
-
-	if info.IsSigner {
-		inProgressSigs.Inc()
-	}
-
-	return err
+	return nil
 }
 
 func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {

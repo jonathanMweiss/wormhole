@@ -53,6 +53,23 @@ type inactives struct {
 	downtimeEnding []*tss.PartyID
 }
 
+func (i *inactives) getFaultiesWithout(pid *tss.PartyID) []*tss.PartyID {
+	if pid == nil {
+		return i.partyIDs
+	}
+
+	faulties := make([]*tss.PartyID, 0, len(i.partyIDs)-1)
+	for _, p := range i.partyIDs {
+		if equalPartyIds(p, pid) {
+			continue
+		}
+
+		faulties = append(faulties, p)
+	}
+
+	return faulties
+}
+
 // Used to know which guardians aren't to be used in the protocol for specific chainID.
 type getInactiveGuardiansCommand struct {
 	ChainID vaa.ChainID
@@ -164,6 +181,8 @@ func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
 }
 
 func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
+	t.logger.Info("received a problem message from another guardian", zap.Any("problem issuer", cmd.issuer))
+
 	pid := protoToPartyId(cmd.issuer)
 
 	m := f.membersData[strPartyId(partyIdToString(pid))]
@@ -188,7 +207,7 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 	}
 
 	retryNow := chainData.liveSigsWaitingForThisParty
-	chainData.liveSigsWaitingForThisParty = nil
+	chainData.liveSigsWaitingForThisParty = map[party.Digest]*signatureState{} // clear the live sigs.
 
 	go func() {
 		for dgst := range retryNow {

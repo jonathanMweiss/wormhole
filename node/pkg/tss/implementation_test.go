@@ -741,7 +741,7 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("overlapping returns", func(t *testing.T) {
+	t.Run("downserver returns and signs on original committee", func(t *testing.T) {
 		a := assert.New(t)
 
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
@@ -752,11 +752,12 @@ func TestFT(t *testing.T) {
 		engines := loadGuardians(a)
 		for _, e := range engines {
 			e.GuardianStorage.Configurations.GuardianSigningDownTime = time.Second * 10
-
 		}
 
+		signers := getSigningGuardians(a, engines, digest(dgst))
+
 		fmt.Println("starting engines.")
-		for _, engine := range engines {
+		for _, engine := range signers { // start only original committee!
 			a.NoError(engine.Start(ctx))
 		}
 
@@ -764,8 +765,6 @@ func TestFT(t *testing.T) {
 		dnchn := msgHandler(ctx, engines, 1)
 
 		fmt.Println("engines started, requesting sigs")
-
-		signers := getSigningGuardians(a, engines, digest(dgst))
 
 		signers[0].reportProblem(0) // using chainid==0.
 
@@ -784,7 +783,13 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("multiple sigs and failurs", func(t *testing.T) {
+	t.Run("1 sig 2 faults one after the other", func(t *testing.T) {
+		// set a scenario where one of the original doesn't receive the OK to sign, and a server in the next committee is
+		// doesn't receive the OK to sign also.
+		t.Fail()
+	})
+
+	t.Run("3 sigs and 3 faults", func(t *testing.T) {
 		t.Fail()
 	})
 
