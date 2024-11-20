@@ -327,31 +327,7 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 
 	// At least one honest guardian saw the message, but I didn't (I'm probablt behined the network).
 	if sigState.maxGuardianVotes() >= t.GuardianStorage.getMaxExpectedFaults()+1 {
-		t.logger.Info("noticed i'm behind others, and attemmpting to inform them",
-			zap.String("chainID", sigState.chain.String()), // TODO.
-		)
-
-		sm := &tsscommv1.SignedMessage{
-			Content: &tsscommv1.SignedMessage_Problem{
-				Problem: &tsscommv1.Problem{
-					ChainID:     uint32(sigState.chain),
-					Emitter:     0, // TODO
-					IssuingTime: timestamppb.Now(),
-				},
-			},
-			Sender:    partyIdToProto(t.Self),
-			Signature: []byte{},
-		}
-
-		if err := t.sign(sm); err != nil {
-			t.logger.Error("failed to report a problem to the other guardians", zap.Error(err))
-
-			return
-		}
-
-		echo := newEcho(sm, t.guardiansProtoIDs)
-
-		intoChannelOrDone[Sendable](t.ctx, t.messageOutChan, echo)
+		t.reportProblem(sigState.chain)
 
 		return
 	}
@@ -360,6 +336,33 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 	// increasing timeout for this signature.
 	sigState.alertTime = time.Now().Add(t.MaxSigStartWaitTime / 2) // TODO: what should be the value here?
 	f.sigAlerts.Enqueue(sigState)
+}
+
+func (t *Engine) reportProblem(chain vaa.ChainID) {
+	t.logger.Info("noticed i'm behind others and attemmpting to inform them",
+		zap.String("chainID", chain.String()),
+	)
+
+	sm := &tsscommv1.SignedMessage{
+		Content: &tsscommv1.SignedMessage_Problem{
+			Problem: &tsscommv1.Problem{
+				ChainID:     uint32(chain),
+				Emitter:     0, // TODO
+				IssuingTime: timestamppb.Now(),
+			},
+		},
+
+		Sender:    partyIdToProto(t.Self),
+		Signature: []byte{},
+	}
+
+	if err := t.sign(sm); err != nil {
+		t.logger.Error("failed to report a problem to the other guardians", zap.Error(err))
+
+		return
+	}
+
+	intoChannelOrDone[Sendable](t.ctx, t.messageOutChan, newEcho(sm, t.guardiansProtoIDs))
 }
 
 // get the maximal amount of guardians that saw the digest and started signing.

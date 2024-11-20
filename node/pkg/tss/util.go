@@ -92,12 +92,6 @@ func (c *activeSigCounter) remove(trackid *common.TrackingID) {
 		delete(c.guardianToDigests[g], strDigest(trackid.Digest))
 	}
 }
-func (c *activeSigCounter) digestToGuardiansLen() int {
-	c.mtx.RLock()
-	defer c.mtx.RUnlock()
-
-	return len(c.digestToGuardians)
-}
 
 func (l logableError) Error() string {
 	if l.cause == nil {

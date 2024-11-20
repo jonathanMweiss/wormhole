@@ -698,47 +698,96 @@ func ctxExpiredFirst(ctx context.Context, ch chan struct{}) bool {
 func TestFT(t *testing.T) {
 	// t.FailNow()
 	// return
+	t.Run("single failing server", func(t *testing.T) {
+		a := assert.New(t)
 
-	a := assert.New(t)
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
 
-	ctx, cancel := context.WithTimeout(supctx, time.Minute*2)
-	defer cancel()
+		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
-	dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
-
-	engines := loadGuardians(a)
-	fmt.Println("starting engines.")
-	for _, engine := range engines {
-		a.NoError(engine.Start(ctx))
-	}
-
-	fmt.Println("msgHandler settup:")
-	dnchn := msgHandler(ctx, engines, 1)
-
-	fmt.Println("engines started, requesting sigs")
-
-	e := getSigningGuardian(a, engines, digest(dgst))
-
-	enginesWithoutE := make([]*Engine, 0, len(engines)-1)
-	eSelf := partyIdToString(e.Self)
-	for i := range engines {
-		if partyIdToString(engines[i].Self) == eSelf {
-			continue
+		engines := loadGuardians(a)
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
 		}
 
-		enginesWithoutE = append(enginesWithoutE, engines[i])
-	}
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, 1)
 
-	// all engines are started, now we can begin the protocol.
-	for _, engine := range enginesWithoutE {
-		tmp := make([]byte, 32)
-		copy(tmp, dgst[:])
-		engine.BeginAsyncThresholdSigningProtocol(tmp)
-	}
+		fmt.Println("engines started, requesting sigs")
 
-	if ctxExpiredFirst(ctx, dnchn) {
-		a.FailNowf("%s", "context expired")
-	}
+		e := getSigningGuardian(a, engines, digest(dgst))
+
+		enginesWithoutE := make([]*Engine, 0, len(engines)-1)
+		eSelf := partyIdToString(e.Self)
+		for i := range engines {
+			if partyIdToString(engines[i].Self) == eSelf {
+				continue
+			}
+
+			enginesWithoutE = append(enginesWithoutE, engines[i])
+		}
+
+		// all engines are started, now we can begin the protocol.
+		for _, engine := range enginesWithoutE {
+			tmp := make([]byte, 32)
+			copy(tmp, dgst[:])
+			engine.BeginAsyncThresholdSigningProtocol(tmp)
+		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("%s", "context expired")
+		}
+	})
+
+	t.Run("overlapping returns", func(t *testing.T) {
+		a := assert.New(t)
+
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
+
+		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+		engines := loadGuardians(a)
+		for _, e := range engines {
+			e.GuardianStorage.Configurations.GuardianSigningDownTime = time.Second * 10
+
+		}
+
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
+		}
+
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, 1)
+
+		fmt.Println("engines started, requesting sigs")
+
+		signers := getSigningGuardians(a, engines, digest(dgst))
+
+		signers[0].reportProblem(0) // using chainid==0.
+
+		time.Sleep(time.Second * 2)
+
+		// Only engines from original comittee are allowed to sign.
+		for _, engine := range signers {
+			tmp := make([]byte, 32)
+			copy(tmp, dgst[:])
+
+			engine.BeginAsyncThresholdSigningProtocol(tmp)
+		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("%s", "context expired")
+		}
+	})
+
+	t.Run("multiple sigs and failurs", func(t *testing.T) {
+		t.Fail()
+	})
+
 }
 
 func TestMessagesWithBadRounds(t *testing.T) {
@@ -1009,6 +1058,14 @@ func broadcast(chns map[string]chan msgg, engine *Engine, m Sendable) {
 	}
 }
 
+// strictly for the tests.
+func (c *activeSigCounter) digestToGuardiansLen() int {
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
+
+	return len(c.digestToGuardians)
+}
+
 func TestSigCounter(t *testing.T) {
 	a := assert.New(t)
 
@@ -1132,10 +1189,14 @@ func TestSigCounter(t *testing.T) {
 
 	})
 }
-
 func getSigningGuardian(a *assert.Assertions, engines []*Engine, digests ...digest) *Engine {
+	return getSigningGuardians(a, engines, digests...)[0]
+}
+
+func getSigningGuardians(a *assert.Assertions, engines []*Engine, digests ...digest) []*Engine {
 	a.GreaterOrEqual(len(digests), 1) // at least one
 
+	guardians := make([]*Engine, 0, len(engines))
 mainloop:
 	for _, e := range engines {
 
@@ -1151,10 +1212,10 @@ mainloop:
 			}
 		}
 
-		return e
+		guardians = append(guardians, e)
 	}
 
-	panic("no one is a signer")
+	return guardians
 }
 
 func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
