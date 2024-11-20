@@ -39,6 +39,11 @@ type deliveryCommand struct {
 	from      *tss.PartyID
 }
 
+type SigEndCommand struct {
+	// TODO: don't forget to remove and release resources, and free memory from the chainData of a sig.
+	*common.TrackingID
+}
+
 // supporting the ftCmd interface
 func (d *deliveryCommand) ftCmd() {}
 
@@ -58,7 +63,6 @@ func (g *getInactiveGuardiansCommand) ftCmd() {}
 
 type trackIDSigRelatedData struct {
 	sawProtocolMessagesFrom map[strPartyId]bool
-	committeeMembers        []strPartyId
 }
 
 // this signature structs are held by two different data structures.
@@ -160,11 +164,13 @@ func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
 }
 
 func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
-	m := f.membersData[strPartyId(partyIdToString(protoToPartyId(cmd.issuer)))]
+	pid := protoToPartyId(cmd.issuer)
+
+	m := f.membersData[strPartyId(partyIdToString(pid))]
 
 	reviveTime := time.Now().Add(t.GuardianStorage.GuardianSigningDownTime)
 	chainID := vaa.ChainID(cmd.ChainID)
-	// TODO: insert into a timer heap to retry messages in the vicinity of this time.
+
 	chainData, ok := m.ftPartyData[chainID]
 	if !ok {
 		chainData = newEmptyChainData()
@@ -176,6 +182,20 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 		chainData.timeToRevive = reviveTime
 		// TODO: insert to some timed heap
 	}
+
+	if equalPartyIds(pid, t.Self) {
+		return
+	}
+
+	retryNow := chainData.liveSigsWaitingForThisParty
+	chainData.liveSigsWaitingForThisParty = nil
+
+	go func() {
+		for dgst := range retryNow {
+			// TODO: maybe find something smarter to do here.
+			t.BeginAsyncThresholdSigningProtocol(dgst[:])
+		}
+	}()
 }
 
 func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInactiveGuardiansCommand) {
@@ -232,7 +252,6 @@ func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
 	}
 
 	state.approvedToSign = true
-
 	for _, pid := range cmd.SigningInfo.SigningCommittee {
 		m, ok := f.membersData[strPartyId(partyIdToString(pid))]
 		if !ok {
@@ -287,7 +306,6 @@ func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
 	if !ok {
 		tidData = &trackIDSigRelatedData{
 			sawProtocolMessagesFrom: map[strPartyId]bool{},
-			committeeMembers:        []strPartyId{},
 		}
 
 		state.trackidRelatedData[trackidStr(tid.ToString())] = tidData

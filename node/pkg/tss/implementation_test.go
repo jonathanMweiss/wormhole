@@ -650,8 +650,8 @@ func TestE2E(t *testing.T) {
 }
 
 func TestFT(t *testing.T) {
-	t.FailNow()
-	return
+	// t.FailNow()
+	// return
 
 	a := assert.New(t)
 
