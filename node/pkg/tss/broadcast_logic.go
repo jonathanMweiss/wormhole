@@ -201,7 +201,7 @@ func (t *Engine) relbroadcastInspection(parsed parsedMsg, msg Incoming) (shouldE
 	signed := msg.toEcho().Message
 	echoer := msg.GetSource()
 
-	state, err := t.fetchState(parsed, signed)
+	state, err := t.fetchOrCreateState(parsed, signed)
 	if err != nil {
 		return false, false, err
 	}
@@ -221,7 +221,7 @@ func (t *Engine) relbroadcastInspection(parsed parsedMsg, msg Incoming) (shouldE
 	return allowedToBroadcast, false, nil
 }
 
-func (t *Engine) fetchState(parsed parsedMsg, signed *tsscommv1.SignedMessage) (*broadcaststate, error) {
+func (t *Engine) fetchOrCreateState(parsed parsedMsg, signed *tsscommv1.SignedMessage) (*broadcaststate, error) {
 	uuid, err := parsed.getUUID(t.LoadDistributionKey)
 	if err != nil {
 		return nil, err
