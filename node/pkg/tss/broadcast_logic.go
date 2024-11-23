@@ -18,11 +18,10 @@ import (
 // voterId is comprised from the id and key of the signer, should match the guardians (in GuardianStorage) id and key.
 type voterId string
 
-// SECURITY NOTE: this function sets a sessionID to a message. Used to ensure no equivocation.
-//
-// We don't add the content of the message to the uuid, instead we collect all data that can put this message in a context.
-// this is used by the reliable broadcast to check no two messages from the same sender will be used to update the full party
-// in the same round for the specific session of the protocol.
+// We use the UUID to distinguish between messages the reliable broadcast algorithm handles.
+// when supporting a new uuid, take careful considertaions.
+// for instance, TSS messages create their uuid from values that make each message unique, but also
+// ensure the reliable-broadcast can detect equivication attacks.
 type hasUUID interface {
 	getUUID(loadDistKey []byte) (uuid, error)
 }
