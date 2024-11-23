@@ -246,10 +246,18 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 
 	// adding nil to the list of parties to ensure we run once without changing the faulties
 	for _, reviving := range append([]*tss.PartyID{nil}, inactiveParties.partyIDs...) {
+		faulties := inactiveParties.getFaultiesWithout(reviving)
+
+		if len(faulties) > t.getMaxExpectedFaults() {
+			t.logger.Error("too many faulty guardians to start the signing protocol")
+
+			continue // not a failure of the method, so it should continue, instead of returning an error.
+		}
+
 		info, err := t.fp.AsyncRequestNewSignature(party.SigningTask{
 			Digest: d,
 			// indicating the reviving guardian will be given a chance to join the protocol.
-			Faulties:     inactiveParties.getFaultiesWithout(reviving),
+			Faulties:     faulties,
 			AuxilaryData: []byte{}, // TODO
 		})
 

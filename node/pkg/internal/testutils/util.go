@@ -46,7 +46,9 @@ func MakeSupervisorContext(ctx context.Context) context.Context {
 		),
 	)
 
+	// used to block this function until the supervisor sets the supervisedCtx
 	barrier := make(chan struct{})
+
 	supervisor.New(ctx, logger, func(ctx context.Context) error {
 		lck.Lock()
 		supervisedCtx = ctx

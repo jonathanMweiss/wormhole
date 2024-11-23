@@ -621,7 +621,7 @@ func TestE2E(t *testing.T) {
 		a.Equal(engines[0].Threshold+1, int(m.Gauge.GetValue()))
 
 		if ctxExpiredFirst(ctx, dnchn) {
-			a.FailNowf("%s", "context expired")
+			a.FailNowf("context expired", "context expired")
 		}
 
 		time.Sleep(time.Millisecond * 500) // ensuring all other engines have finished and not just one of them.
@@ -681,7 +681,7 @@ func TestE2E(t *testing.T) {
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
-			a.FailNowf("%s", "context expired")
+			a.FailNowf("context expired", "context expired")
 		}
 	})
 }
@@ -737,7 +737,7 @@ func TestFT(t *testing.T) {
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
-			a.FailNowf("%s", "context expired")
+			a.FailNowf("context expired", "context expired")
 		}
 	})
 
@@ -779,18 +779,54 @@ func TestFT(t *testing.T) {
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
-			a.FailNowf("%s", "context expired")
+			a.FailNowf("context expired", "context expired")
 		}
 	})
 
-	t.Run("1 sig 2 faults one after the other", func(t *testing.T) {
-		// set a scenario where one of the original doesn't receive the OK to sign, and a server in the next committee is
-		// doesn't receive the OK to sign also.
+	t.Run("1 sig 2 omission faults one after the other", func(t *testing.T) {
 		t.Fail()
 	})
 
-	t.Run("3 sigs and 3 faults", func(t *testing.T) {
-		t.Fail()
+	t.Run("cant recover after f faults", func(t *testing.T) {
+		a := assert.New(t)
+
+		ctx, cancel := context.WithTimeout(supctx, time.Second*20)
+		defer cancel()
+
+		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+		engines := loadGuardians(a)
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
+		}
+		f := engines[0].getMaxExpectedFaults()
+
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, 1)
+
+		fmt.Println("engines started, requesting sigs")
+
+		for i := 0; i < f+1; i++ {
+			engines[i].reportProblem(0)
+		}
+
+		time.Sleep(time.Second * 2) // waiting for the f issues to be reported.
+
+		// letting the other engines run
+		for i := f + 1; i < len(engines); i++ {
+			engine := engines[i]
+
+			tmp := make([]byte, 32)
+			copy(tmp, dgst[:])
+
+			engine.BeginAsyncThresholdSigningProtocol(tmp)
+		}
+
+		// expecting the time to run out.
+		if !ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("context expired", "context expired")
+		}
 	})
 
 }
@@ -1029,6 +1065,7 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 							continue
 						}
 
+						fmt.Println("received signature")
 						once.Do(func() {
 							close(signalSuccess)
 						})
