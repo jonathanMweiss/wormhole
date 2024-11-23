@@ -14,8 +14,11 @@ import (
 )
 
 // Fault tolerance:
-// We adopt a straightforward approach to handle “semi-omission” failures (for availability reasons only, we assume honest but delayed behavior: nodes that haven’t upgraded their binaries to match the most recent code may not receive new blocks or transactions):
-// A node assumes that if f+1 begins signing, but it hasn’t received any new blocks or transactions yet, it will temporarily stop signing.
+// We adopt a straightforward approach to handle honest-but-missing-current-blocks
+// failures (for availability reasons only, we assume honest but delayed behavior: nodes
+// that haven’t upgraded their binaries to match the most recent code may
+// not receive new blocks or transactions): A node assumes that if f+1 begins signing,
+//but it hasn’t received any new blocks or transactions yet, it will temporarily stop signing.
 //
 // The logic behind this assumption is as follows:
 // Since I observed that f+1 joined the protocol to sign, I must have at least one honest server who has seen the block and the signature, but I haven’t.

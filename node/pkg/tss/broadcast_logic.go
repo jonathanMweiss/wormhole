@@ -44,13 +44,6 @@ const parsedProblemDomainlen = len(parsedProblemDomain)
 
 func (p *parsedProblem) getTrackingID() *common.TrackingID {
 	return nil
-	// dgst, _ := p.getUUID(nil)
-
-	// return &common.TrackingID{
-	// 	Digest:       dgst[:],
-	// 	PartiesState: []byte{},
-	// 	AuxilaryData: []byte(parsedProblemDomain), // ensures this has specific auxilary data.
-	// }
 }
 
 func (p *parsedProblem) wrapError(err error) error {
