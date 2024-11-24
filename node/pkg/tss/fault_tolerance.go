@@ -17,11 +17,14 @@ import (
 // We adopt a straightforward approach to handle honest-but-missing-current-blocks
 // failures (for availability reasons only, we assume honest but delayed behavior: nodes
 // that haven’t upgraded their binaries to match the most recent code may
-// not receive new blocks or transactions): A node assumes that if f+1 begins signing,
-//but it hasn’t received any new blocks or transactions yet, it will temporarily stop signing.
+// not receive new blocks or transactions):
+// A node that witness f+1 other nodes signing a digest that it hasn’t seen yet
+// will assume it isn't up-to-date and will alert all other guardians (via reliable-broadcast protocol)
+// and then stop signing temporarily.
 //
 // The logic behind this assumption is as follows:
-// Since I observed that f+1 joined the protocol to sign, I must have at least one honest server who has seen the block and the signature, but I haven’t.
+// Since I observed that f+1 joined the protocol to sign, I must have at least one honest server
+// who has seen the block and the signature, but I haven’t (after x seconds).
 // This implies that I am delayed, and I should temporarily remove myself from the committees for some time.
 
 type trackidStr string
@@ -88,11 +91,12 @@ type tackingIDContext struct {
 	sawProtocolMessagesFrom map[strPartyId]bool
 }
 
-// this signature structs are held by two different data structures.
-// 1. a map so we can access and update these easily.
-// 2. a heap to keep track of the ttl of each signature.
-//
-// Once the timer of the heap pops, we check the state of the signature and decide what to do (change comitte members, etc).
+// the signatureState struct is used to keep track of a signature.
+// the same struct is held by two different data structures:
+//  1. a map so we can access and update the sigState easily.
+//  2. a timedHeap that orders the signatures by the time they should be checked.
+//     once the timedHeap timer expires we inspect the top (sigState) and decide whether we should report
+//     a problem to the other guardians, or we should increase the timeout for this signature.
 type signatureState struct {
 	chain vaa.ChainID // blockchain the message relates to (e.g. Ethereum, Solana, etc).
 
