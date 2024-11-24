@@ -671,7 +671,7 @@ func (t *Engine) feedIncomingToFp(parsed tss.ParsedMessage) error {
 		return t.fp.Update(parsed)
 	}
 
-	tooManySignersErrCntr.Inc()
+	tooManySimulSigsErrCntr.Inc()
 
 	return fmt.Errorf("guardian %v has reached the maximum number of simultaneous signatures", from.Id)
 }
