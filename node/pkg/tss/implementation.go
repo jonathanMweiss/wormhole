@@ -244,8 +244,10 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		return fmt.Errorf("failed to get inactive guardians: %w", err)
 	}
 
-	// adding nil to the list of parties to ensure we run once without changing the faulties
-	for _, reviving := range append([]*tss.PartyID{nil}, inactiveParties.partyIDs...) {
+	// adding nil to the list of downtimeEnding to ensure we run once without changing
+	// the list of failing guardians. that is, we run the protocol once without using
+	// any guardian that might revive soon.
+	for _, reviving := range append([]*tss.PartyID{nil}, inactiveParties.downtimeEnding...) {
 		faulties := inactiveParties.getFaultiesWithout(reviving)
 
 		if len(faulties) > t.getMaxExpectedFaults() {
@@ -262,7 +264,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		})
 
 		if err != nil {
-			// TODO: should i tell that the guardian started even on failure?
+			// note, we don't inform the fault-tolerance tracker of the error, so it can put this guardian in timeoout.
 			return err
 		}
 

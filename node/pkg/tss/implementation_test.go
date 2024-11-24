@@ -783,10 +783,6 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("1 sig 2 omission faults one after the other", func(t *testing.T) {
-		t.Fail()
-	})
-
 	t.Run("cant recover after f faults", func(t *testing.T) {
 		a := assert.New(t)
 
@@ -827,6 +823,18 @@ func TestFT(t *testing.T) {
 		if !ctxExpiredFirst(ctx, dnchn) {
 			a.FailNowf("context expired", "context expired")
 		}
+	})
+
+	t.Run("overlap with different return times per guardian", func(t *testing.T) {
+		t.Fail()
+	})
+
+	t.Run("1 sig 2 omission faults one after the other", func(t *testing.T) {
+		t.Fail()
+	})
+
+	t.Run("recover given a missing heartbeat", func(t *testing.T) {
+		t.Fail()
 	})
 
 }
