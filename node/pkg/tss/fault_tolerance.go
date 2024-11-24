@@ -26,12 +26,33 @@ import (
 // Since I observed that f+1 joined the protocol to sign, I must have at least one honest server
 // who has seen the block and the signature, but I haven’t (after x seconds).
 // This implies that I am delayed, and I should temporarily remove myself from the committees for some time.
+//
+//
+// ft Process: each guardian keeps track of the digest, signatures and trackingIDs it saw using the
+// ftTracker and its goroutine. The ftTracker receives ftCommands from the Engine and update its state
+// according to these commands. It will output a problem message to the other guardians if it detects
+// that it is behind the network.
+// below is the ftCommand interface and the commands that implement it.
 
-type trackidStr string
+// ftCommand is a marker interface for commands that reach the ftTracker.
+// to become ftCommand, the struct must implement the ftCmd() method (and since
+// this is a marker interface, this method can be empty).
+//
+// the commands include signCommand, deliveryCommand, getInactiveGuardiansCommand, and parsedProblem.
+//   - signCommand is used to inform the ftTracker that a guardian saw a digest, and what related information
+//     it has about the digest.
+//   - deliveryCommand is used to inform the ftTracker that a guardian saw a message and forwarded it
+//     to the fullParty.
+//   - getInactiveGuardiansCommand is used to know which guardians aren't to be used in the protocol for
+//     specific chainID.
+//   - parsedProblem is used to deliver a problem message from another
+//     guardian (after it was accepted by the reliable-broadcast protocol).
 type ftCommand interface {
 	// TODO: consider applyCmd(*Engine, *ftTracker) instead of this.
 	ftCmd() // marker interface
 }
+
+type trackidStr string
 
 type signCommand struct {
 	SigningInfo *party.SigningInfo
