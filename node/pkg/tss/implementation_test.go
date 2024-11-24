@@ -751,7 +751,7 @@ func TestFT(t *testing.T) {
 
 		engines := loadGuardians(a)
 		for _, e := range engines {
-			e.GuardianStorage.Configurations.GuardianSigningDownTime = time.Second * 10
+			e.GuardianStorage.Configurations.GuardianDownTime = time.Second * 10
 		}
 
 		signers := getSigningGuardians(a, engines, digest(dgst))

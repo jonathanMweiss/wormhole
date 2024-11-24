@@ -193,7 +193,7 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 
 	m := f.membersData[strPartyId(partyIdToString(pid))]
 
-	reviveTime := time.Now().Add(t.GuardianStorage.GuardianSigningDownTime)
+	reviveTime := time.Now().Add(t.GuardianStorage.GuardianDownTime)
 	chainID := vaa.ChainID(cmd.ChainID)
 
 	chainData, ok := m.ftChainContext[chainID]

@@ -70,9 +70,9 @@ type Configurations struct {
 	MaxSimultaneousSignatures int
 	// MaxSignerTTL is the maximum time a signature is allowed to be active.
 	// used to release resources.
-	MaxSignerTTL            time.Duration
-	MaxSigStartWaitTime     time.Duration // time to wait for a signature to start before thinking the blockchain node of the guardian is faulty.
-	GuardianSigningDownTime time.Duration // once a guardian is marked as faulty, this is the time it isn't allowed into the protocol.
+	MaxSignerTTL        time.Duration
+	MaxSigStartWaitTime time.Duration // time to wait for a signature to start before thinking the blockchain node of the guardian is faulty.
+	GuardianDownTime    time.Duration // once a guardian is marked as faulty, this is the time it isn't allowed into the protocol.
 }
 
 // GuardianStorage is a struct that holds the data needed for a guardian to participate in the TSS protocol
@@ -295,8 +295,8 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 		storage.MaxSigStartWaitTime = defaultMaxSigStartWaitTime
 	}
 
-	if storage.GuardianSigningDownTime == 0 {
-		storage.GuardianSigningDownTime = defaultGuardianSigningDownTime
+	if storage.GuardianDownTime == 0 {
+		storage.GuardianDownTime = defaultGuardianDownTime
 	}
 
 	fpParams := &party.Parameters{

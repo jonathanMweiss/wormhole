@@ -318,7 +318,7 @@ func (player *dkgSetupPlayer) handleKeygenEndMessage(m *keygen.LocalPartySaveDat
 			MaxSimultaneousSignatures: defaultMaxLiveSignatures,
 			MaxSignerTTL:              defaultMaxSignerTTL,
 			MaxSigStartWaitTime:       defaultMaxSigStartWaitTime,
-			GuardianSigningDownTime:   defaultGuardianSigningDownTime,
+			GuardianDownTime:          defaultGuardianDownTime,
 		},
 	}
 }
