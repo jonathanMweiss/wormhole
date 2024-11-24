@@ -25,21 +25,26 @@ func hashSignedMessage(msg *tsscommv1.SignedMessage) digest {
 		return digest{}
 	}
 
-	b := bytes.NewBuffer(nil)
+	var b *bytes.Buffer
 
 	switch m := msg.Content.(type) {
 	case *tsscommv1.SignedMessage_TssContent:
+		b = bytes.NewBuffer(nil)
+
 		b.Write(m.TssContent.Payload)
 		vaa.MustWrite(b, binary.BigEndian, m.TssContent.MsgSerialNumber)
-	case *tsscommv1.SignedMessage_Problem:
-		vaa.MustWrite(b, binary.BigEndian, m.Problem.ChainID)
-		vaa.MustWrite(b, binary.BigEndian, m.Problem.Emitter)
-		vaa.MustWrite(b, binary.BigEndian, m.Problem.IssuingTime.AsTime().Unix())
-	}
 
-	pid := msg.Sender
-	b.Write([]byte(pid.Id))
-	b.Write(pid.Key)
+		b.Write([]byte(msg.Sender.Id))
+		b.Write(msg.Sender.Key)
+
+	case *tsscommv1.SignedMessage_Problem:
+		bts, _ := (&parsedProblem{
+			Problem: m.Problem,
+			issuer:  msg.Sender,
+		}).serialize()
+
+		b = bytes.NewBuffer(bts)
+	}
 
 	return hash(b.Bytes())
 }
