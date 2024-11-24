@@ -90,16 +90,16 @@ func (p *parsedProblem) getUUID(distLoadKey []byte) (uuid, error) {
 	return uuid(hash(append(bts, distLoadKey...))), nil
 }
 
-type parsedTsscontent struct {
+type parsedTssContent struct {
 	tss.ParsedMessage
 	signingRound
 }
 
-func (msg *parsedTsscontent) getUUID(loadDistKey []byte) (uuid, error) {
+func (msg *parsedTssContent) getUUID(loadDistKey []byte) (uuid, error) {
 	return getMessageUUID(msg.ParsedMessage, loadDistKey)
 }
 
-func (p *parsedTsscontent) wrapError(err error) error {
+func (p *parsedTssContent) wrapError(err error) error {
 	if p == nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (p *parsedTsscontent) wrapError(err error) error {
 	}
 }
 
-func (p *parsedTsscontent) getTrackingID() *common.TrackingID {
+func (p *parsedTssContent) getTrackingID() *common.TrackingID {
 	if p == nil {
 		return nil
 	}

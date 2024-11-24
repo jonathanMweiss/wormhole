@@ -645,7 +645,7 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	switch v := parsed.(type) {
 	case *parsedProblem:
 		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, v) // received delivery status.
-	case *parsedTsscontent:
+	case *parsedTssContent:
 		deliveredMsgCntr.Inc()
 		if err := t.feedIncomingToFp(v.ParsedMessage); err != nil {
 			return shouldEcho, parsed.wrapError(fmt.Errorf("failed to update the full party: %w", err))
@@ -689,7 +689,7 @@ func (t *Engine) handleUnicast(m Incoming) error {
 		return err
 	}
 
-	fpmsg, ok := parsed.(*parsedTsscontent)
+	fpmsg, ok := parsed.(*parsedTssContent)
 	if !ok {
 		return parsed.wrapError(fmt.Errorf("unicast casting issue"))
 	}
@@ -776,7 +776,7 @@ func (t *Engine) parseEcho(m Incoming) (parsedMsg, error) {
 			return nil, err
 		}
 
-		parsed := &parsedTsscontent{p, ""}
+		parsed := &parsedTssContent{p, ""}
 
 		rnd, err := getRound(parsed)
 		if err != nil {
@@ -849,7 +849,7 @@ func (t *Engine) parseUnicast(m Incoming) (parsedMsg, error) {
 		return nil, err
 	}
 
-	parsed := &parsedTsscontent{p, ""}
+	parsed := &parsedTssContent{p, ""}
 
 	///
 	////

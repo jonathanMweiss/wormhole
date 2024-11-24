@@ -88,7 +88,7 @@ func TestBroadcast(t *testing.T) {
 
 			echo := parsedIntoEcho(a, e1, parsed1)
 
-			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
@@ -108,14 +108,14 @@ func TestBroadcast(t *testing.T) {
 			echo := parsedIntoEcho(a, e1, parsed1)
 			echo.setSource(e2.Self)
 
-			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
 			echo.setSource(e3.Self)
 
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
@@ -148,21 +148,21 @@ func TestDeliver(t *testing.T) {
 			echo := parsedIntoEcho(a, e1, parsed1)
 			echo.setSource(e2.Self)
 
-			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
 			echo.setSource(e3.Self)
 
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
 			echo.setSource(e1.Self)
 
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.True(shouldDeliver)
@@ -181,28 +181,28 @@ func TestDeliver(t *testing.T) {
 			echo := parsedIntoEcho(a, e1, parsed1)
 			echo.setSource(e2.Self)
 
-			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
 
 			echo.setSource(e3.Self)
 
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.True(shouldBroadcast)
 			a.False(shouldDeliver)
 
 			echo.setSource(e1.Self)
 
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.True(shouldDeliver)
 
 			echo.setSource(e4.Self)
 
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.NoError(err)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
@@ -242,14 +242,14 @@ func TestEquivocation(t *testing.T) {
 
 			parsed1 := generateFakeMessageWithRandomContent(e1.Self, e2.Self, rndType, trackingId)
 
-			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, parsedIntoEcho(a, e2, parsed1))
+			shouldBroadcast, shouldDeliver, err := e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, parsedIntoEcho(a, e2, parsed1))
 			a.NoError(err)
 			a.True(shouldBroadcast) //should broadcast since e2 is the source of this message.
 			a.False(shouldDeliver)
 
 			parsed2 := generateFakeMessageWithRandomContent(e1.Self, e2.Self, rndType, trackingId)
 
-			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTsscontent{parsed2, ""}, parsedIntoEcho(a, e2, parsed2))
+			shouldBroadcast, shouldDeliver, err = e1.relbroadcastInspection(&parsedTssContent{parsed2, ""}, parsedIntoEcho(a, e2, parsed2))
 			a.ErrorAs(err, &ErrEquivicatingGuardian)
 			a.False(shouldBroadcast)
 			a.False(shouldDeliver)
@@ -263,7 +263,7 @@ func TestEquivocation(t *testing.T) {
 				TssContent.
 				Payload[0] += 1
 			// now echoer is equivicating (change content, but of some seen message):
-			_, _, err = e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, equvicatingEchoerMessage)
+			_, _, err = e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, equvicatingEchoerMessage)
 			a.ErrorContains(err, e2.Self.Id)
 		}
 	})
@@ -333,7 +333,7 @@ func TestBadInputs(t *testing.T) {
 			echo.setSource(e2.Self)
 
 			echo.toEcho().Message.Signature[0] += 1
-			_, _, err := e1.relbroadcastInspection(&parsedTsscontent{parsed1, ""}, echo)
+			_, _, err := e1.relbroadcastInspection(&parsedTssContent{parsed1, ""}, echo)
 			a.ErrorIs(err, ErrInvalidSignature)
 
 			if rnd == round1Message1 || rnd == round2Message {
@@ -897,7 +897,7 @@ func TestMessagesWithBadRounds(t *testing.T) {
 
 func generateFakeParsedMessageWithRandomContent(from, to *tss.PartyID, rnd signingRound, digest party.Digest) parsedMsg {
 	fake := generateFakeMessageWithRandomContent(from, to, rnd, digest)
-	return &parsedTsscontent{fake, ""}
+	return &parsedTssContent{fake, ""}
 }
 
 // if to == nil it's a broadcast message.
