@@ -1,7 +1,6 @@
 package tss
 
 import (
-	"fmt"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
@@ -62,6 +61,9 @@ func (i *inactives) getFaultiesWithout(pid *tss.PartyID) []*tss.PartyID {
 		return i.partyIDs
 	}
 
+	if len(i.partyIDs) == 0 {
+		return i.partyIDs
+	}
 	faulties := make([]*tss.PartyID, 0, len(i.partyIDs)-1)
 	for _, p := range i.partyIDs {
 		if equalPartyIds(p, pid) {
@@ -135,7 +137,7 @@ type ftTracker struct {
 func newChainContext() *ftChainContext {
 	return &ftChainContext{
 		// ensuring the first time we see this party, we don't assume it's down.
-		timeToRevive: time.Now(),
+		timeToRevive: time.Now().Add(-time.Hour),
 
 		retrySigs:                   map[party.Digest]*signatureState{},
 		liveSigsWaitingForThisParty: map[party.Digest]*signatureState{},
@@ -246,7 +248,6 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 
 		//  |revive_time - now| < synchronsingInterval, then it's time to revive comes soon.
 		if chainData.timeToRevive.Sub(now).Abs() < synchronsingInterval {
-			fmt.Println("weh")
 			reply.downtimeEnding = append(reply.downtimeEnding, m.partyID)
 		}
 	}
