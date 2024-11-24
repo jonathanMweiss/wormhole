@@ -131,7 +131,7 @@ type ftTracker struct {
 	membersData map[strPartyId]*ftParty
 }
 
-func newEmptyChainData() *ftChainContext {
+func newChainContext() *ftChainContext {
 	return &ftChainContext{
 		timeToRevive:                time.Now(),
 		retrySigs:                   map[party.Digest]*signatureState{},
@@ -195,7 +195,7 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 
 	chainData, ok := m.ftChainContext[chainID]
 	if !ok {
-		chainData = newEmptyChainData()
+		chainData = newChainContext()
 		m.ftChainContext[chainID] = chainData
 	}
 
@@ -230,7 +230,7 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 	for _, m := range f.membersData {
 		chainData, ok := m.ftChainContext[cmd.ChainID]
 		if !ok {
-			chainData = newEmptyChainData()
+			chainData = newChainContext()
 			m.ftChainContext[cmd.ChainID] = chainData
 		}
 
@@ -284,7 +284,7 @@ func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
 
 		chainData, ok := m.ftChainContext[state.chain]
 		if !ok {
-			chainData = newEmptyChainData()
+			chainData = newChainContext()
 			m.ftChainContext[state.chain] = chainData
 		}
 
