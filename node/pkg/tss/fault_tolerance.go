@@ -111,7 +111,7 @@ func (s *signatureState) GetEndTime() time.Time {
 	return s.alertTime
 }
 
-type ftChainData struct {
+type ftChainContext struct {
 	timeToRevive time.Time // the time this party is expected to come back and be part of the protocol again.
 	// sigs that once the revive time expire should be retried.
 	retrySigs                   map[party.Digest]*signatureState
@@ -120,8 +120,8 @@ type ftChainData struct {
 
 // Describes a specfic party's data in terms of fault tolerance.
 type ftParty struct {
-	partyID     *tss.PartyID
-	ftPartyData map[vaa.ChainID]*ftChainData
+	partyID        *tss.PartyID
+	ftChainContext map[vaa.ChainID]*ftChainContext
 }
 
 type ftTracker struct {
@@ -131,8 +131,8 @@ type ftTracker struct {
 	membersData map[strPartyId]*ftParty
 }
 
-func newEmptyChainData() *ftChainData {
-	return &ftChainData{
+func newEmptyChainData() *ftChainContext {
+	return &ftChainContext{
 		timeToRevive:                time.Now(),
 		retrySigs:                   map[party.Digest]*signatureState{},
 		liveSigsWaitingForThisParty: map[party.Digest]*signatureState{},
@@ -150,8 +150,8 @@ func (t *Engine) ftTracker() {
 	for _, pid := range t.GuardianStorage.Guardians {
 		strPid := strPartyId(partyIdToString(pid))
 		f.membersData[strPid] = &ftParty{
-			partyID:     pid,
-			ftPartyData: map[vaa.ChainID]*ftChainData{},
+			partyID:        pid,
+			ftChainContext: map[vaa.ChainID]*ftChainContext{},
 		}
 	}
 
@@ -193,10 +193,10 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 	reviveTime := time.Now().Add(t.GuardianStorage.GuardianSigningDownTime)
 	chainID := vaa.ChainID(cmd.ChainID)
 
-	chainData, ok := m.ftPartyData[chainID]
+	chainData, ok := m.ftChainContext[chainID]
 	if !ok {
 		chainData = newEmptyChainData()
-		m.ftPartyData[chainID] = chainData
+		m.ftChainContext[chainID] = chainData
 	}
 
 	// we update the revival time only if the revival time had passed
@@ -228,10 +228,10 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 
 	reply := inactives{}
 	for _, m := range f.membersData {
-		chainData, ok := m.ftPartyData[cmd.ChainID]
+		chainData, ok := m.ftChainContext[cmd.ChainID]
 		if !ok {
 			chainData = newEmptyChainData()
-			m.ftPartyData[cmd.ChainID] = chainData
+			m.ftChainContext[cmd.ChainID] = chainData
 		}
 
 		if chainData.timeToRevive.After(time.Now()) {
@@ -282,10 +282,10 @@ func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
 			continue
 		}
 
-		chainData, ok := m.ftPartyData[state.chain]
+		chainData, ok := m.ftChainContext[state.chain]
 		if !ok {
 			chainData = newEmptyChainData()
-			m.ftPartyData[state.chain] = chainData
+			m.ftChainContext[state.chain] = chainData
 		}
 
 		chainData.liveSigsWaitingForThisParty[dgst] = state
