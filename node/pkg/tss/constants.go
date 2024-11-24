@@ -2,7 +2,9 @@ package tss
 
 import (
 	"time"
+	"unsafe"
 
+	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 )
 
@@ -17,8 +19,8 @@ const (
 	pemKeySize       = 178
 	signingRoundSize = 8
 
-	// auxiliaryData is emmiterchain + chainID in bytes.
-	auxiliaryDataSize = 4 + 4
+	// auxiliaryData is emmiterChain in bytes.
+	auxiliaryDataSize = unsafe.Sizeof(vaa.ChainID(0))
 	maxParties        = 256
 	// trackindID = digest + auxiliaryData + bitmap of all parties
 	// 3 bytes for '-' between each field.
