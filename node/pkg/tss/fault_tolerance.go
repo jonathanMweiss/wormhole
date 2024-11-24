@@ -81,7 +81,7 @@ type getInactiveGuardiansCommand struct {
 
 func (g *getInactiveGuardiansCommand) ftCmd() {}
 
-type trackIDSigRelatedData struct {
+type tackingIDContext struct {
 	sawProtocolMessagesFrom map[strPartyId]bool
 }
 
@@ -99,7 +99,7 @@ type signatureState struct {
 	// each trackingId is a unique attempt to sign a message.
 	// Once one of the trackidStr saw f+1 guardians and we haven't seent the digest yet, we can assume
 	// we are behind the network and we should inform the others.
-	trackidRelatedData map[trackidStr]*trackIDSigRelatedData
+	trackidContext map[trackidStr]*tackingIDContext
 
 	alertTime time.Time
 
@@ -266,9 +266,9 @@ func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
 		state = &signatureState{
 			chain: extractChainIDFromTrackingID(tid),
 
-			trackidRelatedData: map[trackidStr]*trackIDSigRelatedData{},
-			alertTime:          time.Now(),
-			beginTime:          time.Now(),
+			trackidContext: map[trackidStr]*tackingIDContext{},
+			alertTime:      time.Now(),
+			beginTime:      time.Now(),
 		}
 		f.sigsState[dgst] = state
 	}
@@ -312,11 +312,11 @@ func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
 	if !ok {
 		// create a sig state.
 		state = &signatureState{
-			chain:              extractChainIDFromTrackingID(tid),
-			approvedToSign:     false,
-			trackidRelatedData: map[trackidStr]*trackIDSigRelatedData{},
-			alertTime:          time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
-			beginTime:          time.Now(),
+			chain:          extractChainIDFromTrackingID(tid),
+			approvedToSign: false,
+			trackidContext: map[trackidStr]*tackingIDContext{},
+			alertTime:      time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
+			beginTime:      time.Now(),
 		}
 		f.sigsState[dgst] = state
 
@@ -324,13 +324,13 @@ func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
 		f.sigAlerts.Enqueue(state)
 	}
 
-	tidData, ok := state.trackidRelatedData[trackidStr(tid.ToString())]
+	tidData, ok := state.trackidContext[trackidStr(tid.ToString())]
 	if !ok {
-		tidData = &trackIDSigRelatedData{
+		tidData = &tackingIDContext{
 			sawProtocolMessagesFrom: map[strPartyId]bool{},
 		}
 
-		state.trackidRelatedData[trackidStr(tid.ToString())] = tidData
+		state.trackidContext[trackidStr(tid.ToString())] = tidData
 	}
 
 	tidData.sawProtocolMessagesFrom[strPartyId(partyIdToString(cmd.from))] = true
@@ -390,7 +390,7 @@ func (t *Engine) reportProblem(chain vaa.ChainID) {
 // get the maximal amount of guardians that saw the digest and started signing.
 func (s *signatureState) maxGuardianVotes() int {
 	max := 0
-	for _, tidData := range s.trackidRelatedData {
+	for _, tidData := range s.trackidContext {
 		if len(tidData.sawProtocolMessagesFrom) > max {
 			max = len(tidData.sawProtocolMessagesFrom)
 		}
