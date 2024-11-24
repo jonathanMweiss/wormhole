@@ -321,7 +321,7 @@ func intoChannelOrDone[T any](ctx context.Context, c chan T, v T) error {
 	}
 }
 
-func outofChannelOrDone[T any](ctx context.Context, c chan T) (T, error) {
+func outOfChannelOrDone[T any](ctx context.Context, c chan T) (T, error) {
 	var v T
 	select {
 	case v = <-c:

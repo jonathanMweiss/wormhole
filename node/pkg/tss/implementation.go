@@ -239,7 +239,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	}
 
 	// waiting for the reply.
-	inactiveParties, err := outofChannelOrDone(t.ctx, cmd.reply)
+	inactiveParties, err := outOfChannelOrDone(t.ctx, cmd.reply)
 	if err != nil {
 		return fmt.Errorf("failed to get inactive guardians: %w", err)
 	}
