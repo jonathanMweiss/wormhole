@@ -768,7 +768,7 @@ func TestFT(t *testing.T) {
 
 		signers[0].reportProblem(0) // using chainid==0.
 
-		time.Sleep(time.Second * 2)
+		time.Sleep(synchronsingInterval + time.Second)
 
 		// Only engines from original comittee are allowed to sign.
 		for _, engine := range signers {
