@@ -39,9 +39,6 @@ type parsedProblem struct {
 // Ensures the parsedProblem implements the ftCommand interface.
 func (p *parsedProblem) ftCmd() {}
 
-const parsedProblemDomain = "tssProblemDomainSeperator"
-const parsedProblemDomainlen = len(parsedProblemDomain)
-
 func (p *parsedProblem) getTrackingID() *common.TrackingID {
 	return nil
 }
@@ -58,15 +55,29 @@ func (p *parsedProblem) serialize() ([]byte, error) {
 	if p == nil {
 		return nil, fmt.Errorf("nil parsedMsg")
 	}
-	b := bytes.NewBuffer(make([]byte, 0, 4+4+8+32+parsedProblemDomainlen)) // space for each of the values
+	unixtime := p.IssuingTime.AsTime().Unix()
+
+	fromId := [hostnameSize]byte{}
+	copy(fromId[:], []byte(p.issuer.Id))
+
+	fromKey := [pemKeySize]byte{}
+	copy(fromKey[:], p.issuer.Key)
+
+	capacity := len(parsedProblemDomain) +
+		hostnameSize +
+		pemKeySize +
+		auxiliaryDataSize +
+		8 // 8 bytes for the unixtime.
+
+	b := bytes.NewBuffer(make([]byte, 0, capacity))
 
 	b.WriteString(parsedProblemDomain) // domain separation.
-
+	b.Write(fromId[:])
+	b.Write(fromKey[:])
 	vaa.MustWrite(b, binary.BigEndian, p.ChainID)
-	vaa.MustWrite(b, binary.BigEndian, p.Emitter)
-	vaa.MustWrite(b, binary.BigEndian, p.IssuingTime.AsTime().Unix())
+	// vaa.MustWrite(b, binary.BigEndian, p.Emitter) // TODO: not sure this exists.
+	vaa.MustWrite(b, binary.BigEndian, unixtime)
 
-	b.WriteString(partyIdToString(protoToPartyId(p.issuer)))
 	return b.Bytes(), nil
 }
 

@@ -20,7 +20,7 @@ const (
 	signingRoundSize = 8
 
 	// auxiliaryData is emmiterChain in bytes.
-	auxiliaryDataSize = unsafe.Sizeof(vaa.ChainID(0))
+	auxiliaryDataSize = int(unsafe.Sizeof(vaa.ChainID(0)))
 	maxParties        = 256
 	// trackindID = digest + auxiliaryData + bitmap of all parties
 	// 3 bytes for '-' between each field.
@@ -38,4 +38,7 @@ const (
 	//the assumed time thata message can be delayed between two parties.
 	// for instance guardian 1 received a problem report at time 00:07, then guardian 2 can be assumed to have received the same problem report between times 00:02 and 00:12
 	synchronsingInterval = time.Second * 5
+
+	parsedProblemDomain = "tssProblemDomainSeperator"
+	tssContentDomain    = "tssContentDomainSeperator"
 )

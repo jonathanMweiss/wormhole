@@ -827,7 +827,10 @@ func getMessageUUID(msg tss.ParsedMessage, loadDistKey []byte) (uuid, error) {
 	round := [signingRoundSize]byte{}
 	copy(round[:], rnd)
 
-	d := append([]byte("tssMsgUUID:"), loadDistKey...)
+	d := make([]byte, 0, len(tssContentDomain)+len(loadDistKey)+int(trackingIDSize)+hostnameSize+pemKeySize)
+
+	d = append(d, tssContentDomain...)
+	d = append(d, loadDistKey...)
 	d = append(d, messageTrackingID[:]...)
 	d = append(d, fromId[:]...)
 	d = append(d, fromKey[:]...)
