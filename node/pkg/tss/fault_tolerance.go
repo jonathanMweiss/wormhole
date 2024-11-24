@@ -210,6 +210,10 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 		// TODO: insert to some timed heap
 	}
 
+	// if the problem is about this guardian, then there is no reason to retry the sigs since it won't
+	// be part of the protocol.
+	// we do let this guardian know that it is faulty and it's time so it can collect correct data
+	// from signingInfo, which should be synchronised with the other guardians (if it attempts to sign later sigs).
 	if equalPartyIds(pid, t.Self) {
 		return
 	}
