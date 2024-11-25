@@ -388,10 +388,6 @@ func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
 	tidData.sawProtocolMessagesFrom[strPartyId(partyIdToString(cmd.from))] = true
 }
 
-func extractChainIDFromTrackingID(tid *common.TrackingID) vaa.ChainID {
-	return 0 // TODO.
-}
-
 func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 	sigState := f.sigAlerts.Dequeue()
 

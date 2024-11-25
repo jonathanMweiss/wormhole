@@ -2,11 +2,13 @@ package tss
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
+	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	"github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
@@ -358,4 +360,18 @@ func getCommitteeIDs(pids []*tss.PartyID) []string {
 	}
 
 	return ids
+}
+
+func extractChainIDFromTrackingID(tid *common.TrackingID) vaa.ChainID {
+	bts := [2]byte{}
+	copy(bts[:], tid.AuxilaryData)
+	return vaa.ChainID(binary.BigEndian.Uint16(bts[:]))
+}
+
+func chainIDToBytes(chainID vaa.ChainID) []byte {
+	bts := [2]byte{}
+	binary.BigEndian.PutUint16(bts[:], uint16(chainID))
+	tmp := binary.BigEndian.Uint16(bts[:])
+	_ = tmp
+	return bts[:]
 }

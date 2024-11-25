@@ -675,7 +675,7 @@ func TestE2E(t *testing.T) {
 				tmp := make([]byte, 32)
 				copy(tmp, d[:])
 
-				engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
+				engine.BeginAsyncThresholdSigningProtocol(tmp, 1)
 			}
 		}
 
@@ -816,7 +816,7 @@ func TestFT(t *testing.T) {
 			tmp := make([]byte, 32)
 			copy(tmp, dgst[:])
 
-			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, 1)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {

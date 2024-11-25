@@ -256,7 +256,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 			Digest: d,
 			// indicating the reviving guardian will be given a chance to join the protocol.
 			Faulties:     faulties,
-			AuxilaryData: []byte{}, // TODO
+			AuxilaryData: nil, // TODO
 		})
 
 		if err != nil {
