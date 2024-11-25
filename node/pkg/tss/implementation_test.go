@@ -577,7 +577,6 @@ func TestRouteCheck(t *testing.T) {
 	e1.fpErrChannel <- nil
 
 	time.Sleep(time.Millisecond * 200)
-
 }
 
 func TestE2E(t *testing.T) {
@@ -741,7 +740,7 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("downserver returns and signs on original committee", func(t *testing.T) {
+	t.Run("down server returns and signs on original committee", func(t *testing.T) {
 		a := assert.New(t)
 
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
@@ -750,14 +749,11 @@ func TestFT(t *testing.T) {
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
 		engines := loadGuardians(a)
-		for _, e := range engines {
-			e.GuardianStorage.Configurations.GuardianDownTime = time.Second * 10
-		}
-
 		signers := getSigningGuardians(a, engines, digest(dgst))
 
 		fmt.Println("starting engines.")
 		for _, engine := range signers { // start only original committee!
+			engine.GuardianStorage.Configurations.GuardianDownTime = time.Second * 10
 			a.NoError(engine.Start(ctx))
 		}
 
@@ -777,6 +773,94 @@ func TestFT(t *testing.T) {
 
 			engine.BeginAsyncThresholdSigningProtocol(tmp)
 		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("context expired", "context expired")
+		}
+	})
+
+	t.Run("down server returns and signs on original committee different return times", func(t *testing.T) {
+		// changing the GuardianDownTime parameter with different value for each guardian
+		// let us simulate a situation where each guardian received the "problem" message at a different time.
+		a := assert.New(t)
+
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
+
+		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+		engines := loadGuardians(a)
+		signers := getSigningGuardians(a, engines, digest(dgst))
+
+		fmt.Println("starting engines.")
+		// start only original committee!
+		for i, engine := range signers {
+			// set each guardian with a different downtime.
+			// ensure the protocol generates a signature.
+			engine.GuardianStorage.Configurations.GuardianDownTime = time.Second * 4 * time.Duration(i+1)
+			a.NoError(engine.Start(ctx))
+		}
+
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, 1)
+
+		fmt.Println("engines started, requesting sigs")
+
+		signers[0].reportProblem(0) // using chainid==0.
+
+		time.Sleep(synchronsingInterval + time.Second)
+
+		// Only engines from original comittee are allowed to sign.
+		for _, engine := range signers {
+			tmp := make([]byte, 32)
+			copy(tmp, dgst[:])
+
+			engine.BeginAsyncThresholdSigningProtocol(tmp)
+		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("context expired", "context expired")
+		}
+	})
+
+	t.Run("server fails during signing multiple digests", func(t *testing.T) {
+		a := assert.New(t)
+		engines := loadGuardians(a)
+		n := 3
+		digests := make([]party.Digest, n)
+		for i := 0; i < n; i++ {
+			digests[i] = party.Digest{byte(i)}
+		}
+
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
+
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
+		}
+
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, len(digests))
+
+		fmt.Println("engines started, requesting sigs")
+
+		// all engines are started, now we can begin the protocol.
+		for _, d := range digests {
+			d := d
+			go func() {
+				for _, engine := range engines {
+					tmp := make([]byte, 32)
+					copy(tmp, d[:])
+
+					engine.BeginAsyncThresholdSigningProtocol(tmp)
+				}
+			}()
+		}
+
+		time.Sleep(time.Second)              // plenty of time for the servers to start signing.
+		engines[0].started.Store(notStarted) // stopping a server from accepting incoming messages.
+		engines[0].reportProblem(0)          // telling the server to report to everyone it has an issue.
 
 		if ctxExpiredFirst(ctx, dnchn) {
 			a.FailNowf("context expired", "context expired")
@@ -823,10 +907,6 @@ func TestFT(t *testing.T) {
 		if !ctxExpiredFirst(ctx, dnchn) {
 			a.FailNowf("context expired", "context expired")
 		}
-	})
-
-	t.Run("overlap with different return times per guardian", func(t *testing.T) {
-		t.Skip()
 	})
 
 	t.Run("1 sig 2 omission faults one after the other", func(t *testing.T) {
