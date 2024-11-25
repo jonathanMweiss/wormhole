@@ -1091,6 +1091,9 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 	signalSuccess := make(chan struct{})
 	once := sync.Once{}
 
+	nmsigs := map[digest]struct{}{}
+	lck := sync.Mutex{}
+
 	go func() {
 		wg := sync.WaitGroup{}
 		wg.Add(len(engines) * 2)
@@ -1125,7 +1128,6 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 
 			//  Listener, responsible to receive output of engine, and direct it to the other engines.
 			go func() {
-				nmsigs := map[digest]struct{}{}
 				defer wg.Done()
 				for {
 					select {
@@ -1152,13 +1154,17 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 						if addr != address {
 							panic("recovered address does not match provided address")
 						}
-						nmsigs[digest(sig.TrackingId.Digest)] = struct{}{}
 
-						if len(nmsigs) < numDiffSigsExpected {
+						lck.Lock()
+						nmsigs[digest(sig.TrackingId.Digest)] = struct{}{}
+						ln := len(nmsigs)
+						lck.Unlock()
+
+						if ln < numDiffSigsExpected {
 							continue
 						}
 
-						fmt.Println("received signature")
+						fmt.Println("received all signatures")
 						once.Do(func() {
 							close(signalSuccess)
 						})
