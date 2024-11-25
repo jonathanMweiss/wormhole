@@ -221,12 +221,6 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 		return fmt.Errorf("vaaDigest length is not 32 bytes")
 	}
 
-	t.logger.Info(
-		"guardian started signing protocol",
-		zap.String("guardian", t.GuardianStorage.Self.Id),
-		zap.String("digest", fmt.Sprintf("%x", vaaDigest)),
-	)
-
 	d := party.Digest{}
 	copy(d[:], vaaDigest)
 
@@ -268,6 +262,14 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 			// note, we don't inform the fault-tolerance tracker of the error, so it can put this guardian in timeoout.
 			return err
 		}
+
+		t.logger.Info(
+			"guardian started signing protocol",
+			zap.String("guardian", t.GuardianStorage.Self.Id),
+			zap.String("digest", fmt.Sprintf("%x", vaaDigest)),
+			zap.String("trackingID", info.TrackingID.ToString()),
+			zap.Any("committee", info.SigningCommittee),
+		)
 
 		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &signCommand{SigningInfo: info})
 

@@ -42,5 +42,5 @@ const (
 	parsedProblemDomain = "tssProblemDomainSeperator"
 	tssContentDomain    = "tssContentDomainSeperator"
 
-	maxDownTimeJitter = time.Second
+	maxDownTimeJitter = time.Minute
 )

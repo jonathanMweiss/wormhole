@@ -695,8 +695,6 @@ func ctxExpiredFirst(ctx context.Context, ch chan struct{}) bool {
 }
 
 func TestFT(t *testing.T) {
-	// t.FailNow()
-	// return
 	t.Run("single failing server", func(t *testing.T) {
 		a := assert.New(t)
 
@@ -782,9 +780,12 @@ func TestFT(t *testing.T) {
 	t.Run("down server returns and signs on original committee different return times", func(t *testing.T) {
 		// changing the GuardianDownTime parameter with different value for each guardian
 		// let us simulate a situation where each guardian received the "problem" message at a different time.
+		//
+		// one of the guardian revival time will be so long that it'll have to restart the guardian using
+		// a timer it set up, and not due to the overlapping interval.
 		a := assert.New(t)
 
-		ctx, cancel := context.WithTimeout(supctx, time.Minute*3)
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
