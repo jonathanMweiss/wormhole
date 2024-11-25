@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/yossigi/tss-lib/v2/common"
@@ -188,6 +189,10 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return fmt.Errorf("signedMessage sender pID error:%w", err)
 	}
 
+	if len(m.Signature) == 0 {
+		return ErrNoAuthenticationField
+	}
+
 	switch v := m.Content.(type) {
 	case *tsscommv1.SignedMessage_TssContent:
 		if err := validateContentCorrectForm(v.TssContent); err != nil {
@@ -197,14 +202,14 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		if err := validateProblemCorrectForm(v.Problem); err != nil {
 			return err
 		}
+
+		if time.Since(v.Problem.IssuingTime.AsTime()).Abs() > 10*time.Minute {
+			return fmt.Errorf("problem's timestamp is too old")
+		}
 	case nil:
 		return ErrNoContent
 	default:
 		return fmt.Errorf("unknown content type: %T", v)
-	}
-
-	if len(m.Signature) == 0 {
-		return ErrNoAuthenticationField
 	}
 
 	return nil

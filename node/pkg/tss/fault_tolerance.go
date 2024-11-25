@@ -226,6 +226,7 @@ func deteministicJitter(cmd *parsedProblem) time.Duration {
 }
 
 func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
+	// at this point, we assume the parsedProblem's time is correct and the signature is valid.
 	t.logger.Info("received a problem message from another guardian", zap.Any("problem issuer", cmd.issuer))
 
 	pid := protoToPartyId(cmd.issuer)
