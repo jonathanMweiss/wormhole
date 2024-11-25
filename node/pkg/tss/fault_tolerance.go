@@ -1,6 +1,7 @@
 package tss
 
 import (
+	"encoding/binary"
 	"time"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
@@ -213,14 +214,26 @@ func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
 	}
 }
 
+func deteministicJitter(cmd *parsedProblem) time.Duration {
+	bts, err := cmd.serialize()
+	if err != nil {
+		return 0
+	}
+
+	jitterBytes := hash(bts)
+	nanoJitter := binary.BigEndian.Uint64(jitterBytes[:8])
+	return time.Duration(nanoJitter) % (maxDownTimeJitter) // granularity of 1 second.
+}
+
 func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 	t.logger.Info("received a problem message from another guardian", zap.Any("problem issuer", cmd.issuer))
 
 	pid := protoToPartyId(cmd.issuer)
 
 	m := f.membersData[strPartyId(partyIdToString(pid))]
-
-	reviveTime := time.Now().Add(t.GuardianStorage.GuardianDownTime)
+	// Adds some deterministic jitter to the time to revive, so parsedProblem messages that arrive at the same time
+	// won't have the same revival time.
+	reviveTime := time.Now().Add(t.GuardianStorage.GuardianDownTime + deteministicJitter(cmd))
 	chainID := vaa.ChainID(cmd.ChainID)
 
 	chainData, ok := m.ftChainContext[chainID]
