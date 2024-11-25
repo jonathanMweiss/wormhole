@@ -16,6 +16,7 @@ import (
 	"github.com/certusone/wormhole/node/pkg/tss/internal"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	"github.com/yossigi/tss-lib/v2/common"
 	tssutil "github.com/yossigi/tss-lib/v2/ecdsa/ethereum"
 	"github.com/yossigi/tss-lib/v2/ecdsa/keygen"
@@ -204,7 +205,7 @@ var (
 )
 
 // BeginAsyncThresholdSigningProtocol used to start the TSS protocol over a specific msg.
-func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
+func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID vaa.ChainID) error {
 	if t == nil {
 		return errNilTssEngine
 	}

@@ -474,16 +474,16 @@ func TestBadInputs(t *testing.T) {
 		var tmp *Engine = nil
 		engines2 := load5GuardiansSetupForBroadcastChecks(a)
 
-		a.ErrorIs(tmp.BeginAsyncThresholdSigningProtocol(nil), errNilTssEngine)
-		a.ErrorIs(e2.BeginAsyncThresholdSigningProtocol(nil), errTssEngineNotStarted)
+		a.ErrorIs(tmp.BeginAsyncThresholdSigningProtocol(nil, 0), errNilTssEngine)
+		a.ErrorIs(e2.BeginAsyncThresholdSigningProtocol(nil, 0), errTssEngineNotStarted)
 
 		tmp = engines2[1]
 		tmp.started.Store(started)
 
-		a.ErrorContains(e1.BeginAsyncThresholdSigningProtocol(make([]byte, 12)), "length is not 32 bytes")
+		a.ErrorContains(e1.BeginAsyncThresholdSigningProtocol(make([]byte, 12), 0), "length is not 32 bytes")
 
 		tmp.fp = nil
-		a.ErrorContains(tmp.BeginAsyncThresholdSigningProtocol(nil), "not set up correctly")
+		a.ErrorContains(tmp.BeginAsyncThresholdSigningProtocol(nil, 0), "not set up correctly")
 	})
 
 	t.Run("fetch certificate", func(t *testing.T) {
@@ -613,7 +613,7 @@ func TestE2E(t *testing.T) {
 		for _, engine := range engines {
 			tmp := make([]byte, 32)
 			copy(tmp, dgst[:])
-			engine.BeginAsyncThresholdSigningProtocol(tmp)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
 		}
 
 		inProgressSigs.Write(&m)
@@ -675,7 +675,7 @@ func TestE2E(t *testing.T) {
 				tmp := make([]byte, 32)
 				copy(tmp, d[:])
 
-				engine.BeginAsyncThresholdSigningProtocol(tmp)
+				engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
 			}
 		}
 
@@ -730,7 +730,7 @@ func TestFT(t *testing.T) {
 		for _, engine := range enginesWithoutE {
 			tmp := make([]byte, 32)
 			copy(tmp, dgst[:])
-			engine.BeginAsyncThresholdSigningProtocol(tmp)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
@@ -769,7 +769,7 @@ func TestFT(t *testing.T) {
 			tmp := make([]byte, 32)
 			copy(tmp, dgst[:])
 
-			engine.BeginAsyncThresholdSigningProtocol(tmp)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
@@ -816,7 +816,7 @@ func TestFT(t *testing.T) {
 			tmp := make([]byte, 32)
 			copy(tmp, dgst[:])
 
-			engine.BeginAsyncThresholdSigningProtocol(tmp)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
@@ -854,7 +854,7 @@ func TestFT(t *testing.T) {
 					tmp := make([]byte, 32)
 					copy(tmp, d[:])
 
-					engine.BeginAsyncThresholdSigningProtocol(tmp)
+					engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
 				}
 			}()
 		}
@@ -901,7 +901,7 @@ func TestFT(t *testing.T) {
 			tmp := make([]byte, 32)
 			copy(tmp, dgst[:])
 
-			engine.BeginAsyncThresholdSigningProtocol(tmp)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
 		}
 
 		// expecting the time to run out.
@@ -915,6 +915,10 @@ func TestFT(t *testing.T) {
 	})
 
 	t.Run("recover given a missing heartbeat", func(t *testing.T) {
+		t.Skip()
+	})
+
+	t.Run("server fails on a single chain, shouldn't affect signatures on other chain", func(t *testing.T) {
 		t.Skip()
 	})
 
@@ -1350,7 +1354,7 @@ mainloop:
 }
 
 func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
-	go e1.BeginAsyncThresholdSigningProtocol(d[:])
+	go e1.BeginAsyncThresholdSigningProtocol(d[:], 0)
 
 	var msg Sendable
 	for i := 0; i < round1NumberOfMessages(e1); i++ { // cleaning the channel, and taking one of the messages.

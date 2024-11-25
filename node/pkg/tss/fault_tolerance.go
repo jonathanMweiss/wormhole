@@ -263,7 +263,7 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 	go func() {
 		for dgst := range retryNow {
 			// TODO: maybe find something smarter to do here.
-			t.BeginAsyncThresholdSigningProtocol(dgst[:])
+			t.BeginAsyncThresholdSigningProtocol(dgst[:], chainID)
 		}
 	}()
 }
