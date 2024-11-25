@@ -214,7 +214,7 @@ func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
 	}
 }
 
-func deteministicJitter(cmd *parsedProblem) time.Duration {
+func (cmd *parsedProblem) deteministicJitter() time.Duration {
 	bts, err := cmd.serialize()
 	if err != nil {
 		return 0
@@ -234,7 +234,7 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 	m := f.membersData[strPartyId(partyIdToString(pid))]
 	// Adds some deterministic jitter to the time to revive, so parsedProblem messages that arrive at the same time
 	// won't have the same revival time.
-	reviveTime := time.Now().Add(t.GuardianStorage.GuardianDownTime + deteministicJitter(cmd))
+	reviveTime := time.Now().Add(t.GuardianStorage.GuardianDownTime + cmd.deteministicJitter())
 	chainID := vaa.ChainID(cmd.ChainID)
 
 	chainData, ok := m.ftChainContext[chainID]
