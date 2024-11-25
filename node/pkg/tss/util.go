@@ -189,10 +189,6 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return fmt.Errorf("signedMessage sender pID error:%w", err)
 	}
 
-	if len(m.Signature) == 0 {
-		return ErrNoAuthenticationField
-	}
-
 	switch v := m.Content.(type) {
 	case *tsscommv1.SignedMessage_TssContent:
 		if err := validateContentCorrectForm(v.TssContent); err != nil {
@@ -210,6 +206,10 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 		return ErrNoContent
 	default:
 		return fmt.Errorf("unknown content type: %T", v)
+	}
+
+	if len(m.Signature) == 0 {
+		return ErrNoAuthenticationField
 	}
 
 	return nil

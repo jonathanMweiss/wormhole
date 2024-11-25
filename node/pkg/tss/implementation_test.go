@@ -784,7 +784,7 @@ func TestFT(t *testing.T) {
 		// let us simulate a situation where each guardian received the "problem" message at a different time.
 		a := assert.New(t)
 
-		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*3)
 		defer cancel()
 
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}

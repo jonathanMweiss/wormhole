@@ -247,6 +247,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte) error {
 	// adding nil to the list of downtimeEnding to ensure we run once without changing
 	// the list of failing guardians. that is, we run the protocol once without using
 	// any guardian that might revive soon.
+	// if there are no faulty guardians to revive, this ensure we run the protocol with faulties==nil.
 	for _, reviving := range append([]*tss.PartyID{nil}, inactiveParties.downtimeEnding...) {
 		faulties := inactiveParties.getFaultiesWithout(reviving)
 
