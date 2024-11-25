@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"sync"
 
 	"github.com/certusone/wormhole/node/pkg/supervisor"
 	"go.uber.org/zap"
@@ -33,8 +32,6 @@ func GetMockGuardianTssStorage(guardianIndex int) (string, error) {
 	return guardianStorageFname, nil
 }
 
-var lck sync.Mutex
-
 func MakeSupervisorContext(ctx context.Context) context.Context {
 	var supervisedCtx context.Context
 
@@ -50,9 +47,8 @@ func MakeSupervisorContext(ctx context.Context) context.Context {
 	barrier := make(chan struct{})
 
 	supervisor.New(ctx, logger, func(ctx context.Context) error {
-		lck.Lock()
 		supervisedCtx = ctx
-		lck.Unlock()
+
 		close(barrier)
 
 		<-ctx.Done()
