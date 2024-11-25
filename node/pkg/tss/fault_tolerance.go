@@ -289,7 +289,7 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 			reply.partyIDs = append(reply.partyIDs, m.partyID)
 		}
 
-		//  |revive_time - now| < synchronsingInterval, then it's time to revive comes soon.
+		//  |revive_time - now| < synchronsingInterval, then its time to revive comes soon.
 		if chainData.timeToRevive.Sub(now).Abs() < synchronsingInterval {
 			reply.downtimeEnding = append(reply.downtimeEnding, m.partyID)
 		}
@@ -313,6 +313,7 @@ func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
 	dgst := party.Digest{}
 	copy(dgst[:], tid.Digest[:])
 
+	// TODO: Ensure the digest contains the auxilaryData. otherwise, there can be two signatures witth the same digest? I doubt it.
 	state, ok := f.sigsState[dgst]
 	if !ok {
 		state = &signatureState{
