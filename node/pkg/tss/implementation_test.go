@@ -889,6 +889,7 @@ func TestFT(t *testing.T) {
 		ctx, cancel := context.WithTimeout(supctx, time.Second*20)
 		defer cancel()
 
+		cid := vaa.ChainID(0)
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
 		engines := loadGuardians(a)
@@ -904,7 +905,7 @@ func TestFT(t *testing.T) {
 		fmt.Println("engines started, requesting sigs")
 
 		for i := 0; i < f+1; i++ {
-			engines[i].reportProblem(0)
+			engines[i].reportProblem(cid) // TODO: need to happen on a specific chain.
 		}
 
 		time.Sleep(time.Second * 2) // waiting for the f issues to be reported.
@@ -916,12 +917,12 @@ func TestFT(t *testing.T) {
 			tmp := make([]byte, 32)
 			copy(tmp, dgst[:])
 
-			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, cid)
 		}
 
 		// expecting the time to run out.
 		if !ctxExpiredFirst(ctx, dnchn) {
-			a.FailNowf("context expired", "context expired")
+			a.FailNowf("received sig", "received sig")
 		}
 	})
 
@@ -935,6 +936,7 @@ func TestFT(t *testing.T) {
 
 	t.Run("server fails on a single chain, shouldn't affect signatures on other chain", func(t *testing.T) {
 		t.Skip()
+		// TODO: how do i test this? maybe i need larger committees
 	})
 
 }
