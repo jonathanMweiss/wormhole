@@ -24,7 +24,7 @@ const (
 	maxParties        = 256
 	// trackindID = digest + auxiliaryData + bitmap of all parties
 	// 3 bytes for '-' between each field.
-	trackingIDSize = party.DigestSize + (maxParties / 8) + (auxiliaryDataSize + 3)
+	trackingIDSize = party.DigestSize + (maxParties+7)/8 + (auxiliaryDataSize + 3) // TODO: I'm not sure this is the correct size.
 
 	defaultMaxLiveSignatures = 1000
 

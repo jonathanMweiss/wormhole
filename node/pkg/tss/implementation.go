@@ -226,7 +226,8 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 	copy(d[:], vaaDigest)
 
 	cmd := getInactiveGuardiansCommand{
-		reply: make(chan inactives, 1),
+		ChainID: chainID,
+		reply:   make(chan inactives, 1),
 	}
 
 	if err := intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &cmd); err != nil {
@@ -256,7 +257,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 			Digest: d,
 			// indicating the reviving guardian will be given a chance to join the protocol.
 			Faulties:     faulties,
-			AuxilaryData: nil, // TODO
+			AuxilaryData: chainIDToBytes(chainID),
 		})
 
 		if err != nil {

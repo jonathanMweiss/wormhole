@@ -371,7 +371,5 @@ func extractChainIDFromTrackingID(tid *common.TrackingID) vaa.ChainID {
 func chainIDToBytes(chainID vaa.ChainID) []byte {
 	bts := [2]byte{}
 	binary.BigEndian.PutUint16(bts[:], uint16(chainID))
-	tmp := binary.BigEndian.Uint16(bts[:])
-	_ = tmp
 	return bts[:]
 }

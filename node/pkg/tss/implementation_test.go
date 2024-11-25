@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	tsscommon "github.com/yossigi/tss-lib/v2/common"
 	"github.com/yossigi/tss-lib/v2/ecdsa/party"
 	"github.com/yossigi/tss-lib/v2/ecdsa/signing"
@@ -701,8 +702,6 @@ func TestFT(t *testing.T) {
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
-		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
-
 		engines := loadGuardians(a)
 		fmt.Println("starting engines.")
 		for _, engine := range engines {
@@ -714,7 +713,13 @@ func TestFT(t *testing.T) {
 
 		fmt.Println("engines started, requesting sigs")
 
-		e := getSigningGuardian(a, engines, digest(dgst))
+		cID := vaa.ChainID(1)
+		singingTask := party.SigningTask{
+			Digest:       party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9},
+			Faulties:     []*tss.PartyID{},
+			AuxilaryData: chainIDToBytes(cID),
+		}
+		e := getSigningGuardian(a, engines, singingTask)
 
 		enginesWithoutE := make([]*Engine, 0, len(engines)-1)
 		eSelf := partyIdToString(e.Self)
@@ -728,9 +733,10 @@ func TestFT(t *testing.T) {
 
 		// all engines are started, now we can begin the protocol.
 		for _, engine := range enginesWithoutE {
-			tmp := make([]byte, 32)
-			copy(tmp, dgst[:])
-			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
+			tmp := make([]byte, len(singingTask.Digest))
+			copy(tmp, singingTask.Digest[:])
+
+			engine.BeginAsyncThresholdSigningProtocol(tmp, cID)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
@@ -744,10 +750,15 @@ func TestFT(t *testing.T) {
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
-		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+		cID := vaa.ChainID(1)
+		tsk := party.SigningTask{
+			Digest:       party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9},
+			Faulties:     []*tss.PartyID{},
+			AuxilaryData: chainIDToBytes(cID),
+		}
 
 		engines := loadGuardians(a)
-		signers := getSigningGuardians(a, engines, digest(dgst))
+		signers := getSigningGuardians(a, engines, tsk)
 
 		fmt.Println("starting engines.")
 		for _, engine := range signers { // start only original committee!
@@ -766,10 +777,10 @@ func TestFT(t *testing.T) {
 
 		// Only engines from original comittee are allowed to sign.
 		for _, engine := range signers {
-			tmp := make([]byte, 32)
-			copy(tmp, dgst[:])
+			tmp := make([]byte, len(tsk.Digest))
+			copy(tmp, tsk.Digest[:])
 
-			engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, cID)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
@@ -788,10 +799,14 @@ func TestFT(t *testing.T) {
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
-		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
+		cID := vaa.ChainID(1)
+		signingTask := party.SigningTask{
+			Digest:       party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9},
+			AuxilaryData: chainIDToBytes(cID),
+		}
 
 		engines := loadGuardians(a)
-		signers := getSigningGuardians(a, engines, digest(dgst))
+		signers := getSigningGuardians(a, engines, signingTask)
 
 		fmt.Println("starting engines.")
 		// start only original committee!
@@ -813,10 +828,10 @@ func TestFT(t *testing.T) {
 
 		// Only engines from original comittee are allowed to sign.
 		for _, engine := range signers {
-			tmp := make([]byte, 32)
-			copy(tmp, dgst[:])
+			tmp := make([]byte, len(signingTask.Digest))
+			copy(tmp, signingTask.Digest[:])
 
-			engine.BeginAsyncThresholdSigningProtocol(tmp, 1)
+			engine.BeginAsyncThresholdSigningProtocol(tmp, cID)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {
@@ -1215,14 +1230,18 @@ func TestSigCounter(t *testing.T) {
 
 	t.Run("MaxCountBlockAdditionalUpdates", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
-		digests := []digest{{1}, {2}}
+		cID := vaa.ChainID(0)
+		tsks := []party.SigningTask{
+			party.SigningTask{party.Digest{1}, []*tss.PartyID{}, chainIDToBytes(cID)},
+			party.SigningTask{party.Digest{2}, []*tss.PartyID{}, chainIDToBytes(cID)},
+		}
 		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := getSigningGuardian(a, engines, digests...)
+		e1 := getSigningGuardian(a, engines, tsks...)
 
 		e1.MaxSimultaneousSignatures = 1
 		e1.Start(ctx)
 
-		msg := beginSigningAndGrabMessage(e1, digests[0])
+		msg := beginSigningAndGrabMessage(e1, tsks[0].Digest[:], cID)
 
 		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -1230,7 +1249,7 @@ func TestSigCounter(t *testing.T) {
 		}))
 
 		// trying to handle a new message for a different signature.
-		msg = beginSigningAndGrabMessage(e1, digests[1])
+		msg = beginSigningAndGrabMessage(e1, tsks[1].Digest[:], cID)
 
 		a.ErrorContains(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -1240,14 +1259,17 @@ func TestSigCounter(t *testing.T) {
 
 	t.Run("ErrorReduceCount", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
-		digests := []digest{{1}}
+		cID := vaa.ChainID(0)
+		tsks := []party.SigningTask{
+			party.SigningTask{party.Digest{1}, []*tss.PartyID{}, chainIDToBytes(cID)},
+		}
 		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := getSigningGuardian(a, engines, digests...)
+		e1 := getSigningGuardian(a, engines, tsks...)
 		e1.MaxSimultaneousSignatures = 1
 
 		e1.Start(ctx)
 
-		msg := beginSigningAndGrabMessage(e1, digests[0])
+		msg := beginSigningAndGrabMessage(e1, tsks[0].Digest[:], cID)
 
 		incoming := &IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -1275,14 +1297,17 @@ func TestSigCounter(t *testing.T) {
 
 	t.Run("sigDoneReduceCount", func(t *testing.T) {
 		// Tests might fail due to change of the GuardianStorage files
-		digests := []digest{{1}}
+		cID := vaa.ChainID(0)
+		tsks := []party.SigningTask{
+			party.SigningTask{party.Digest{1}, []*tss.PartyID{}, chainIDToBytes(cID)},
+		}
 		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := getSigningGuardian(a, engines, digests...)
+		e1 := getSigningGuardian(a, engines, tsks...)
 		e1.MaxSimultaneousSignatures = 1
 
 		e1.Start(ctx)
 
-		msg := beginSigningAndGrabMessage(e1, digests[0])
+		msg := beginSigningAndGrabMessage(e1, tsks[0].Digest[:], cID)
 
 		incoming := &IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -1309,14 +1334,19 @@ func TestSigCounter(t *testing.T) {
 	})
 
 	t.Run("CanHaveSimulSigners", func(t *testing.T) {
-		digests := []digest{{1}, {2}}
+		cID := vaa.ChainID(0)
+		tsks := []party.SigningTask{
+			party.SigningTask{party.Digest{1}, []*tss.PartyID{}, chainIDToBytes(cID)},
+			party.SigningTask{party.Digest{2}, []*tss.PartyID{}, chainIDToBytes(cID)},
+		}
+
 		engines := load5GuardiansSetupForBroadcastChecks(a)
-		e1 := getSigningGuardian(a, engines, digests...)
+		e1 := getSigningGuardian(a, engines, tsks...)
 		e1.MaxSimultaneousSignatures = 2
 
 		e1.Start(ctx)
 
-		msg := beginSigningAndGrabMessage(e1, digests[0])
+		msg := beginSigningAndGrabMessage(e1, tsks[0].Digest[:], cID)
 
 		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
@@ -1325,27 +1355,24 @@ func TestSigCounter(t *testing.T) {
 
 		a.NoError(e1.handleIncomingTssMessage(&IncomingMessage{
 			Source:  partyIdToProto(e1.Self),
-			Content: beginSigningAndGrabMessage(e1, digests[1]).GetNetworkMessage(),
+			Content: beginSigningAndGrabMessage(e1, tsks[1].Digest[:], cID).GetNetworkMessage(),
 		}))
 
 	})
 }
-func getSigningGuardian(a *assert.Assertions, engines []*Engine, digests ...digest) *Engine {
-	return getSigningGuardians(a, engines, digests...)[0]
+func getSigningGuardian(a *assert.Assertions, engines []*Engine, tsks ...party.SigningTask) *Engine {
+	return getSigningGuardians(a, engines, tsks...)[0]
 }
 
-func getSigningGuardians(a *assert.Assertions, engines []*Engine, digests ...digest) []*Engine {
-	a.GreaterOrEqual(len(digests), 1) // at least one
+func getSigningGuardians(a *assert.Assertions, engines []*Engine, tsks ...party.SigningTask) []*Engine {
+	a.GreaterOrEqual(len(tsks), 1) // at least one
 
 	guardians := make([]*Engine, 0, len(engines))
 mainloop:
 	for _, e := range engines {
 
-		for _, d := range digests {
-			st := party.SigningTask{}
-			copy(st.Digest[:], d[:])
-
-			info1, err := e.fp.GetSigningInfo(st)
+		for _, tsk := range tsks {
+			info1, err := e.fp.GetSigningInfo(tsk)
 			a.NoError(err)
 
 			if !info1.IsSigner {
@@ -1359,8 +1386,8 @@ mainloop:
 	return guardians
 }
 
-func beginSigningAndGrabMessage(e1 *Engine, d digest) Sendable {
-	go e1.BeginAsyncThresholdSigningProtocol(d[:], 0)
+func beginSigningAndGrabMessage(e1 *Engine, dgst []byte, cid vaa.ChainID) Sendable {
+	go e1.BeginAsyncThresholdSigningProtocol(dgst, cid)
 
 	var msg Sendable
 	for i := 0; i < round1NumberOfMessages(e1); i++ { // cleaning the channel, and taking one of the messages.
