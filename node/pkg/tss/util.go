@@ -125,7 +125,7 @@ func logErr(l *zap.Logger, err error) {
 
 	var zapFields []zap.Field
 	if informativeErr.trackingId != nil {
-		zapFields = append(zapFields, zap.String("trackingId", fmt.Sprintf("%x", informativeErr.trackingId)))
+		zapFields = append(zapFields, zap.String("trackingId", informativeErr.trackingId.ToString()))
 	}
 
 	if informativeErr.round != "" {
@@ -349,4 +349,13 @@ func (st *GuardianStorage) validateTrackingIDForm(tid *common.TrackingID) error 
 	// TODO: expecting auxilaryData to be set.
 
 	return nil
+}
+
+func getCommitteeIDs(pids []*tss.PartyID) []string {
+	ids := make([]string, 0, len(pids))
+	for _, v := range pids {
+		ids = append(ids, v.Id)
+	}
+
+	return ids
 }

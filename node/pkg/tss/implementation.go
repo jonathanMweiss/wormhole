@@ -269,7 +269,7 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 			zap.String("guardian", t.GuardianStorage.Self.Id),
 			zap.String("digest", fmt.Sprintf("%x", vaaDigest)),
 			zap.String("trackingID", info.TrackingID.ToString()),
-			zap.Any("committee", info.SigningCommittee),
+			zap.Any("committee", getCommitteeIDs(info.SigningCommittee)),
 		)
 
 		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &signCommand{SigningInfo: info})
