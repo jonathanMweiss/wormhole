@@ -159,7 +159,7 @@ type ftTracker struct {
 func newChainContext() *ftChainContext {
 	return &ftChainContext{
 		// ensuring the first time we see this party, we don't assume it's down.
-		timeToRevive: time.Now().Add(-time.Hour),
+		timeToRevive: time.Now(),
 
 		liveSigsWaitingForThisParty: map[party.Digest]*signatureState{},
 	}
