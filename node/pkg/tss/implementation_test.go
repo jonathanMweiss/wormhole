@@ -38,11 +38,6 @@ var (
 
 	allRounds = append(unicastRounds, broadcastRounds...)
 )
-var supctx context.Context
-
-func init() {
-	supctx = testutils.MakeSupervisorContext(context.Background())
-}
 
 func parsedIntoEcho(a *assert.Assertions, t *Engine, parsed tss.ParsedMessage) *IncomingMessage {
 	payload, _, err := parsed.WireBytes()
@@ -274,6 +269,7 @@ func TestEquivocation(t *testing.T) {
 		engines := load5GuardiansSetupForBroadcastChecks(a)
 		e1, e2 := engines[0], engines[1]
 
+		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cncl := context.WithCancel(supctx)
 		defer cncl()
 
@@ -321,6 +317,7 @@ func TestBadInputs(t *testing.T) {
 	engines := load5GuardiansSetupForBroadcastChecks(a)
 	e1, e2 := engines[0], engines[1]
 
+	supctx := testutils.MakeSupervisorContext(context.Background())
 	ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 	defer cancel()
 
@@ -569,6 +566,7 @@ func TestRouteCheck(t *testing.T) {
 	engines := load5GuardiansSetupForBroadcastChecks(a)
 	e1 := engines[0]
 
+	supctx := testutils.MakeSupervisorContext(context.Background())
 	ctx, cancel := context.WithTimeout(supctx, time.Second*5)
 	defer cancel()
 
@@ -593,6 +591,7 @@ func TestE2E(t *testing.T) {
 
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
+		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
@@ -656,6 +655,7 @@ func TestE2E(t *testing.T) {
 			digests[i] = party.Digest{byte(i)}
 		}
 
+		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
@@ -695,10 +695,19 @@ func ctxExpiredFirst(ctx context.Context, ch chan struct{}) bool {
 	}
 }
 
+func TestFTLoop(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		t.Run("looping", TestFT)
+	}
+
+}
+
 func TestFT(t *testing.T) {
+
 	t.Run("single failing server", func(t *testing.T) {
 		a := assert.New(t)
 
+		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
@@ -746,7 +755,7 @@ func TestFT(t *testing.T) {
 
 	t.Run("down server returns and signs on original committee", func(t *testing.T) {
 		a := assert.New(t)
-
+		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
@@ -795,7 +804,7 @@ func TestFT(t *testing.T) {
 		// one of the guardian revival time will be so long that it'll have to restart the guardian using
 		// a timer it set up, and not due to the overlapping interval.
 		a := assert.New(t)
-
+		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
@@ -848,7 +857,8 @@ func TestFT(t *testing.T) {
 			digests[i] = party.Digest{byte(i)}
 		}
 
-		ctx, cancel := context.WithTimeout(supctx, time.Minute*4)
+		supctx := testutils.MakeSupervisorContext(context.Background())
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
 		fmt.Println("starting engines.")
@@ -862,12 +872,11 @@ func TestFT(t *testing.T) {
 		fmt.Println("engines started, requesting sigs")
 
 		go func() {
-
 			time.Sleep(time.Second / 2)          // plenty of time for the servers to start signing.
 			engines[0].started.Store(notStarted) // stopping a server from accepting incoming messages.
 			engines[0].reportProblem(0)          // telling the server to report to everyone it has an issue.
 
-			fmt.Println("Issued problem now!")
+			fmt.Println("========\nIssued problem now!\n========")
 		}()
 
 		for _, d := range digests {
@@ -889,6 +898,7 @@ func TestFT(t *testing.T) {
 	t.Run("cant recover after f faults", func(t *testing.T) {
 		a := assert.New(t)
 
+		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Second*20)
 		defer cancel()
 
@@ -1184,7 +1194,7 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 							continue
 						}
 
-						fmt.Println("received all signatures")
+						fmt.Println("/////////\nreceived all signatures\n/////////")
 						once.Do(func() {
 							close(signalSuccess)
 						})
@@ -1230,6 +1240,7 @@ func (c *activeSigCounter) digestToGuardiansLen() int {
 func TestSigCounter(t *testing.T) {
 	a := assert.New(t)
 
+	supctx := testutils.MakeSupervisorContext(context.Background())
 	ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 	defer cancel()
 
