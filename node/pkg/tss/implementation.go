@@ -265,12 +265,18 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 			return err
 		}
 
-		t.logger.Info(
-			"guardian started signing protocol",
-			zap.String("guardian", t.GuardianStorage.Self.Id),
+		flds := []zap.Field{
 			zap.String("digest", fmt.Sprintf("%x", vaaDigest)),
 			zap.String("trackingID", info.TrackingID.ToString()),
-			zap.Any("committee", getCommitteeIDs(info.SigningCommittee)),
+			zap.Any("committee", getCommitteeIDs(info.SigningCommittee))}
+
+		if len(faulties) > 0 {
+			flds = append(flds, zap.Any("faulties", getCommitteeIDs(faulties)))
+		}
+
+		t.logger.Info(
+			"guardian started signing protocol",
+			flds...,
 		)
 
 		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &signCommand{SigningInfo: info})
@@ -360,7 +366,7 @@ func (t *Engine) Start(ctx context.Context) error {
 	}
 
 	t.ctx = ctx
-	t.logger = supervisor.Logger(ctx)
+	t.logger = supervisor.Logger(ctx).With(zap.String("ID", t.GuardianStorage.Self.Id))
 
 	if err := t.fp.Start(t.fpOutChan, t.fpSigOutChan, t.fpErrChannel); err != nil {
 		t.started.Store(notStarted)
@@ -375,7 +381,6 @@ func (t *Engine) Start(ctx context.Context) error {
 
 	t.logger.Info(
 		"tss engine started",
-		zap.String("guardian", t.GuardianStorage.Self.Id),
 	)
 
 	return nil
@@ -414,7 +419,6 @@ func (t *Engine) fpListener() {
 		case <-t.ctx.Done():
 			t.logger.Info(
 				"shutting down TSS Engine",
-				zap.String("guardian", t.GuardianStorage.Self.Id),
 			)
 
 			t.fp.Stop()
@@ -813,8 +817,8 @@ func (t *Engine) parseEcho(m Incoming) (parsedMsg, error) {
 func getMessageUUID(msg tss.ParsedMessage, loadDistKey []byte) (uuid, error) {
 	// The TackingID of a parsed message is tied to the run of the protocol for a single
 	//  signature, thus we use it as a sessionID.
-	messageTrackingID := [trackingIDSize]byte{}
-	copy(messageTrackingID[:], []byte(msg.WireMsg().GetTrackingID().ToString()))
+	// messageTrackingID := [trackingIDSize]byte{}
+	// copy(messageTrackingID[:], []byte(msg.WireMsg().GetTrackingID().ToString()))
 
 	fromId := [hostnameSize]byte{}
 	copy(fromId[:], msg.GetFrom().Id)
@@ -836,7 +840,8 @@ func getMessageUUID(msg tss.ParsedMessage, loadDistKey []byte) (uuid, error) {
 
 	d = append(d, tssContentDomain...)
 	d = append(d, loadDistKey...)
-	d = append(d, messageTrackingID[:]...)
+	// d = append(d, messageTrackingID[:]...) // TODO
+	d = append(d, []byte(msg.WireMsg().GetTrackingID().ToString())...)
 	d = append(d, fromId[:]...)
 	d = append(d, fromKey[:]...)
 	d = append(d, round[:]...)

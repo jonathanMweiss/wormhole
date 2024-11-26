@@ -861,22 +861,25 @@ func TestFT(t *testing.T) {
 
 		fmt.Println("engines started, requesting sigs")
 
-		// all engines are started, now we can begin the protocol.
+		go func() {
+
+			time.Sleep(time.Second / 2)          // plenty of time for the servers to start signing.
+			engines[0].started.Store(notStarted) // stopping a server from accepting incoming messages.
+			engines[0].reportProblem(0)          // telling the server to report to everyone it has an issue.
+
+			fmt.Println("Issued problem now!")
+		}()
+
 		for _, d := range digests {
 			d := d
-			go func() {
-				for _, engine := range engines {
-					tmp := make([]byte, 32)
-					copy(tmp, d[:])
 
-					engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
-				}
-			}()
+			for _, engine := range engines {
+				tmp := make([]byte, 32)
+				copy(tmp, d[:])
+
+				engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
+			}
 		}
-
-		time.Sleep(time.Second)              // plenty of time for the servers to start signing.
-		engines[0].started.Store(notStarted) // stopping a server from accepting incoming messages.
-		engines[0].reportProblem(0)          // telling the server to report to everyone it has an issue.
 
 		if ctxExpiredFirst(ctx, dnchn) {
 			a.FailNowf("context expired", "context expired")
