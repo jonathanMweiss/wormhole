@@ -42,6 +42,6 @@ const (
 	parsedProblemDomain = "tssProblemDomainSeperator"
 	tssContentDomain    = "tssContentDomainSeperator"
 
-	maxDownTimeJitter    = time.Minute
-	maxHeartbeatInterval = defaultGuardianDownTime
+	defaultMaxDownTimeJitter = time.Minute
+	maxHeartbeatInterval     = defaultGuardianDownTime
 )

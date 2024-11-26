@@ -753,7 +753,7 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("down server returns and signs on original committee", func(t *testing.T) {
+	t.Run("down server returns and signs with original committee", func(t *testing.T) {
 		a := assert.New(t)
 		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
@@ -771,7 +771,9 @@ func TestFT(t *testing.T) {
 
 		fmt.Println("starting engines.")
 		for _, engine := range signers { // start only original committee!
-			engine.GuardianStorage.Configurations.GuardianDownTime = time.Second * 10
+			// should wake a little before the synchronsingInterval.
+			engine.GuardianStorage.Configurations.GuardianDownTime = synchronsingInterval / 2
+			engine.GuardianStorage.MaxJitter = time.Millisecond
 			a.NoError(engine.Start(ctx))
 		}
 
@@ -780,7 +782,7 @@ func TestFT(t *testing.T) {
 
 		fmt.Println("engines started, requesting sigs")
 
-		signers[0].reportProblem(0) // using chainid==0.
+		signers[0].reportProblem(cID) // using chainid==0.
 
 		time.Sleep(synchronsingInterval + time.Second)
 
@@ -816,6 +818,7 @@ func TestFT(t *testing.T) {
 
 		engines := loadGuardians(a)
 		signers := getSigningGuardians(a, engines, signingTask)
+		a.Len(signers, 3)
 
 		fmt.Println("starting engines.")
 		// start only original committee!

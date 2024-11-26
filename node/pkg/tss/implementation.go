@@ -74,6 +74,7 @@ type Configurations struct {
 	MaxSignerTTL        time.Duration
 	MaxSigStartWaitTime time.Duration // time to wait for a signature to start before thinking the blockchain node of the guardian is faulty.
 	GuardianDownTime    time.Duration // once a guardian is marked as faulty, this is the time it isn't allowed into the protocol.
+	MaxJitter           time.Duration // jitter is used to reduce the chance guardians get back at the same time from DownTime.
 }
 
 // GuardianStorage is a struct that holds the data needed for a guardian to participate in the TSS protocol
@@ -307,6 +308,10 @@ func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
 
 	if storage.GuardianDownTime == 0 {
 		storage.GuardianDownTime = defaultGuardianDownTime
+	}
+
+	if storage.MaxJitter == 0 {
+		storage.MaxJitter = defaultMaxDownTimeJitter
 	}
 
 	fpParams := &party.Parameters{
