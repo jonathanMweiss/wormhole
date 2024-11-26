@@ -695,12 +695,12 @@ func ctxExpiredFirst(ctx context.Context, ch chan struct{}) bool {
 	}
 }
 
-func TestFTLoop(t *testing.T) {
-	for i := 0; i < 5; i++ {
-		t.Run("looping", TestFT)
-	}
+// func TestFTLoop(t *testing.T) {
+// 	for i := 0; i < 5; i++ {
+// 		t.Run("looping", TestFT)
+// 	}
 
-}
+// }
 
 func TestFT(t *testing.T) {
 
@@ -948,8 +948,51 @@ func TestFT(t *testing.T) {
 	})
 
 	t.Run("server fails on a single chain, shouldn't affect signatures on other chain", func(t *testing.T) {
-		t.Skip()
-		// TODO: how do i test this? maybe i need larger committees
+		a := assert.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
+		defer cancel()
+
+		ctx = testutils.MakeSupervisorContext(ctx)
+
+		engines := loadGuardians(a)
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
+		}
+
+		fmt.Println("msgHandler settup:")
+
+		fmt.Println("engines started, requesting sigs")
+
+		tsks := make([]party.SigningTask, 2)
+		for i := range tsks {
+			tsks = append(tsks, party.SigningTask{
+				Digest:       party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9},
+				Faulties:     []*tss.PartyID{},
+				AuxilaryData: chainIDToBytes(vaa.ChainID(i)),
+			})
+		}
+
+		e := getSigningGuardian(a, engines, tsks...)
+		a.NotNil(e) // duo to quorum size of 3 out of 5 there must be one guardian that is needed for both tasks.
+
+		dnchn := msgHandler(ctx, engines, len(tsks)) // expecting 2 messages.
+		e.reportProblem(0)                           // on the chain of the first task only.
+
+		// all engines are started, now we can begin the protocol.
+		for i := 0; i < len(tsks); i++ {
+			for _, engine := range engines {
+				dgst := party.Digest{}
+				copy(dgst[:], tsks[i].Digest[:])
+
+				engine.BeginAsyncThresholdSigningProtocol(dgst[:], vaa.ChainID(i))
+			}
+		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("context expired", "context expired")
+		}
 	})
 
 }
@@ -1121,7 +1164,7 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 	signalSuccess := make(chan struct{})
 	once := sync.Once{}
 
-	nmsigs := map[digest]struct{}{}
+	nmsigs := map[string]struct{}{}
 	lck := sync.Mutex{}
 
 	go func() {
@@ -1186,7 +1229,7 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 						}
 
 						lck.Lock()
-						nmsigs[digest(sig.TrackingId.Digest)] = struct{}{}
+						nmsigs[sig.TrackingId.ToString()] = struct{}{}
 						ln := len(nmsigs)
 						lck.Unlock()
 

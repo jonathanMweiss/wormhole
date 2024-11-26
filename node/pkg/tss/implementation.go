@@ -655,11 +655,6 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, v.intoFtCommand()) // received delivery status.
 	case *parsedTssContent:
 
-		t.logger.Info("Delivering message",
-			zap.String("trackingID", v.getTrackingID().ToString()),
-			zap.String("round", string(v.signingRound)),
-		)
-
 		deliveredMsgCntr.Inc()
 		if err := t.feedIncomingToFp(v.ParsedMessage); err != nil {
 			return shouldEcho, parsed.wrapError(fmt.Errorf("failed to update the full party: %w", err))
