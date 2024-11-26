@@ -201,7 +201,7 @@ func vaidateEchoCorrectForm(e *tsscommv1.Echo) error {
 			return err
 		}
 
-		if time.Since(v.Problem.IssuingTime.AsTime()).Abs() > 10*time.Minute {
+		if time.Since(v.Problem.IssuingTime.AsTime()).Abs() > maxHeartbeatInterval {
 			return fmt.Errorf("problem's timestamp is too old")
 		}
 	case nil:
