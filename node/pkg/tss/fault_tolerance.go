@@ -139,10 +139,8 @@ func (s *signatureState) GetEndTime() time.Time {
 }
 
 type ftChainContext struct {
-	timeToRevive time.Time // the time this party is expected to come back and be part of the protocol again.
-	// sigs that once the revive time expire should be retried.
-	retrySigs                   map[party.Digest]*signatureState
-	liveSigsWaitingForThisParty map[party.Digest]*signatureState
+	timeToRevive                time.Time                        // the time this party is expected to come back and be part of the protocol again.
+	liveSigsWaitingForThisParty map[party.Digest]*signatureState // sigs that once the revive time expire should be retried.
 }
 
 // Describes a specfic party's data in terms of fault tolerance.
@@ -163,7 +161,6 @@ func newChainContext() *ftChainContext {
 		// ensuring the first time we see this party, we don't assume it's down.
 		timeToRevive: time.Now().Add(-time.Hour),
 
-		retrySigs:                   map[party.Digest]*signatureState{},
 		liveSigsWaitingForThisParty: map[party.Digest]*signatureState{},
 	}
 }
