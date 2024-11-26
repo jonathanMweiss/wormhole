@@ -212,7 +212,7 @@ func (t *Engine) ftTracker() {
 // 	}
 // }
 
-func (cmd *reportProblemCommand) deteministicJitter() time.Duration {
+func (cmd *reportProblemCommand) deteministicJitter(maxjitter time.Duration) time.Duration {
 	bts, err := cmd.serialize()
 	if err != nil {
 		return 0
@@ -220,7 +220,7 @@ func (cmd *reportProblemCommand) deteministicJitter() time.Duration {
 
 	jitterBytes := hash(bts)
 	nanoJitter := binary.BigEndian.Uint64(jitterBytes[:8])
-	return time.Duration(nanoJitter).Abs()
+	return (time.Duration(nanoJitter).Abs() % maxjitter).Abs()
 }
 
 func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
@@ -231,15 +231,11 @@ func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
 
 	m := f.membersData[strPartyId(partyIdToString(pid))]
 
-	now := time.Now()
-	jitter := cmd.deteministicJitter()
-	if jitter > t.GuardianStorage.MaxJitter {
-		jitter %= t.GuardianStorage.MaxJitter
-	}
+	jitter := cmd.deteministicJitter(t.GuardianStorage.MaxJitter)
 
 	// Adds some deterministic jitter to the time to revive, so parsedProblem messages that arrive at the same time
 	// won't have the same revival time.
-	reviveTime := now.Add(t.GuardianStorage.GuardianDownTime + jitter)
+	reviveTime := time.Now().Add(t.GuardianStorage.GuardianDownTime + jitter)
 
 	chainID := vaa.ChainID(cmd.ChainID)
 	chainData, ok := m.ftChainContext[chainID]
@@ -249,7 +245,7 @@ func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
 	}
 
 	// we update the revival time only if the revival time had passed
-	if now.After(chainData.timeToRevive) {
+	if time.Now().After(chainData.timeToRevive) {
 		chainData.timeToRevive = reviveTime
 		// TODO: insert to some timed heap
 	}
@@ -280,7 +276,7 @@ func (cmd *getInactiveGuardiansCommand) apply(t *Engine, f *ftTracker) {
 	}
 
 	reply := inactives{}
-	now := time.Now()
+
 	for _, m := range f.membersData {
 		chainData, ok := m.ftChainContext[cmd.ChainID]
 		if !ok {
@@ -290,14 +286,16 @@ func (cmd *getInactiveGuardiansCommand) apply(t *Engine, f *ftTracker) {
 			continue // never seen before, so it's active.
 		}
 
-		if chainData.timeToRevive.After(now) {
-			reply.partyIDs = append(reply.partyIDs, m.partyID)
+		diff := time.Until(chainData.timeToRevive)
+
+		//  |revive_time - now| < synchronsingInterval, then its time to revive comes soon.
+		if diff.Abs() < synchronsingInterval {
+			reply.downtimeEnding = append(reply.downtimeEnding, m.partyID)
 		}
 
-		diffTime := chainData.timeToRevive.Sub(now).Abs()
-		//  |revive_time - now| < synchronsingInterval, then its time to revive comes soon.
-		if diffTime < synchronsingInterval {
-			reply.downtimeEnding = append(reply.downtimeEnding, m.partyID)
+		// if revive time is in the future, then the guardian is inactive.
+		if diff > 0 {
+			reply.partyIDs = append(reply.partyIDs, m.partyID)
 		}
 	}
 

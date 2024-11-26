@@ -704,7 +704,7 @@ func ctxExpiredFirst(ctx context.Context, ch chan struct{}) bool {
 
 func TestFT(t *testing.T) {
 
-	t.Run("single failing server", func(t *testing.T) {
+	t.Run("single server crashes", func(t *testing.T) {
 		a := assert.New(t)
 
 		supctx := testutils.MakeSupervisorContext(context.Background())
@@ -772,8 +772,8 @@ func TestFT(t *testing.T) {
 		fmt.Println("starting engines.")
 		for _, engine := range signers { // start only original committee!
 			// should wake a little before the synchronsingInterval.
-			engine.GuardianStorage.Configurations.GuardianDownTime = synchronsingInterval / 2
-			engine.GuardianStorage.MaxJitter = time.Millisecond
+			engine.GuardianStorage.Configurations.GuardianDownTime = synchronsingInterval
+			engine.GuardianStorage.MaxJitter = time.Microsecond
 			a.NoError(engine.Start(ctx))
 		}
 
@@ -784,7 +784,7 @@ func TestFT(t *testing.T) {
 
 		signers[0].reportProblem(cID) // using chainid==0.
 
-		time.Sleep(synchronsingInterval + time.Second)
+		time.Sleep(synchronsingInterval / 2)
 
 		// Only engines from original comittee are allowed to sign.
 		for _, engine := range signers {
@@ -851,7 +851,7 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("server fails during signing multiple digests", func(t *testing.T) {
+	t.Run("server crashes during signing multiple digests", func(t *testing.T) {
 		a := assert.New(t)
 		engines := loadGuardians(a)
 		n := 3
@@ -950,7 +950,7 @@ func TestFT(t *testing.T) {
 		t.Skip()
 	})
 
-	t.Run("server fails on a single chain, shouldn't affect signatures on other chain", func(t *testing.T) {
+	t.Run("server crashes on a single chain, shouldn't affect signatures on other chain", func(t *testing.T) {
 		a := assert.New(t)
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
