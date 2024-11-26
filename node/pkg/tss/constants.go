@@ -43,5 +43,5 @@ const (
 	tssContentDomain    = "tssContentDomainSeperator"
 
 	maxDownTimeJitter    = time.Minute
-	maxHeartbeatInterval = time.Minute * 10
+	maxHeartbeatInterval = defaultGuardianDownTime
 )
