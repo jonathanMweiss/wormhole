@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unsafe"
 
 	tsscommv1 "github.com/certusone/wormhole/node/pkg/proto/tsscomm/v1"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
@@ -68,7 +69,7 @@ func (p *parsedProblem) serialize() ([]byte, error) {
 		hostnameSize +
 		pemKeySize +
 		auxiliaryDataSize +
-		8 // 8 bytes for the unixtime.
+		int(unsafe.Sizeof(unixtime))
 
 	b := bytes.NewBuffer(make([]byte, 0, capacity))
 
