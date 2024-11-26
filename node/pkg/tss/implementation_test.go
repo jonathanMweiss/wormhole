@@ -848,7 +848,7 @@ func TestFT(t *testing.T) {
 			digests[i] = party.Digest{byte(i)}
 		}
 
-		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*4)
 		defer cancel()
 
 		fmt.Println("starting engines.")

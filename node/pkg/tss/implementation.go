@@ -266,7 +266,6 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 		}
 
 		flds := []zap.Field{
-			zap.String("digest", fmt.Sprintf("%x", vaaDigest)),
 			zap.String("trackingID", info.TrackingID.ToString()),
 			zap.Any("committee", getCommitteeIDs(info.SigningCommittee))}
 
@@ -655,6 +654,12 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 	case *parsedProblem:
 		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, v.intoFtCommand()) // received delivery status.
 	case *parsedTssContent:
+
+		t.logger.Info("Delivering message",
+			zap.String("trackingID", v.getTrackingID().ToString()),
+			zap.String("round", string(v.signingRound)),
+		)
+
 		deliveredMsgCntr.Inc()
 		if err := t.feedIncomingToFp(v.ParsedMessage); err != nil {
 			return shouldEcho, parsed.wrapError(fmt.Errorf("failed to update the full party: %w", err))

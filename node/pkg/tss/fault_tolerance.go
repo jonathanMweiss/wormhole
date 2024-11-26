@@ -220,7 +220,7 @@ func (cmd *reportProblemCommand) deteministicJitter() time.Duration {
 
 	jitterBytes := hash(bts)
 	nanoJitter := binary.BigEndian.Uint64(jitterBytes[:8])
-	return time.Duration(nanoJitter) % (maxDownTimeJitter) // granularity of 1 second.
+	return time.Duration(nanoJitter).Abs() % (maxDownTimeJitter)
 }
 
 func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
@@ -230,11 +230,13 @@ func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
 	pid := protoToPartyId(cmd.issuer)
 
 	m := f.membersData[strPartyId(partyIdToString(pid))]
+
+	now := time.Now()
 	// Adds some deterministic jitter to the time to revive, so parsedProblem messages that arrive at the same time
 	// won't have the same revival time.
-	reviveTime := time.Now().Add(t.GuardianStorage.GuardianDownTime + cmd.deteministicJitter())
-	chainID := vaa.ChainID(cmd.ChainID)
+	reviveTime := now.Add(t.GuardianStorage.GuardianDownTime + cmd.deteministicJitter())
 
+	chainID := vaa.ChainID(cmd.ChainID)
 	chainData, ok := m.ftChainContext[chainID]
 	if !ok {
 		chainData = newChainContext()
@@ -242,7 +244,7 @@ func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
 	}
 
 	// we update the revival time only if the revival time had passed
-	if time.Now().After(chainData.timeToRevive) {
+	if now.After(chainData.timeToRevive) {
 		chainData.timeToRevive = reviveTime
 		// TODO: insert to some timed heap
 	}
