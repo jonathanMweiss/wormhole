@@ -36,8 +36,9 @@ type parsedProblem struct {
 	issuer *tsscommv1.PartyId
 }
 
-// Ensures the parsedProblem implements the ftCommand interface.
-func (p *parsedProblem) ftCmd() {}
+func (p *parsedProblem) intoFtCommand() ftCommand {
+	return &reportProblemCommand{p}
+}
 
 func (p *parsedProblem) getTrackingID() *common.TrackingID {
 	return nil

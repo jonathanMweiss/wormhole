@@ -649,7 +649,7 @@ func (t *Engine) handleEcho(m Incoming) (bool, error) {
 
 	switch v := parsed.(type) {
 	case *parsedProblem:
-		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, v) // received delivery status.
+		intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, v.intoFtCommand()) // received delivery status.
 	case *parsedTssContent:
 		deliveredMsgCntr.Inc()
 		if err := t.feedIncomingToFp(v.ParsedMessage); err != nil {

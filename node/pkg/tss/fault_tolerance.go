@@ -35,9 +35,8 @@ import (
 // that it is behind the network.
 // below is the ftCommand interface and the commands that implement it.
 
-// ftCommand is a marker interface for commands that reach the ftTracker.
-// to become ftCommand, the struct must implement the ftCmd() method (and since
-// this is a marker interface, this method can be empty).
+// ftCommand represents commands that reach the ftTracker.
+// to become ftCommand, the struct must implement the apply(*Engine, *ftTracker) method.
 //
 // the commands include signCommand, deliveryCommand, getInactiveGuardiansCommand, and parsedProblem.
 //   - signCommand is used to inform the ftTracker that a guardian saw a digest, and what related information
@@ -49,8 +48,7 @@ import (
 //   - parsedProblem is used to deliver a problem message from another
 //     guardian (after it was accepted by the reliable-broadcast protocol).
 type ftCommand interface {
-	// TODO: consider applyCmd(*Engine, *ftTracker) instead of this.
-	ftCmd() // marker interface
+	apply(*Engine, *ftTracker)
 }
 
 type trackidStr string
@@ -60,8 +58,6 @@ type signCommand struct {
 }
 
 // supporting the ftCmd interface
-func (s *signCommand) ftCmd() {}
-
 type deliveryCommand struct {
 	parsedMsg tss.Message
 	from      *tss.PartyID
@@ -72,8 +68,9 @@ type SigEndCommand struct {
 	*common.TrackingID
 }
 
-// supporting the ftCmd interface
-func (d *deliveryCommand) ftCmd() {}
+type reportProblemCommand struct {
+	*parsedProblem
+}
 
 type inactives struct {
 	partyIDs []*tss.PartyID
@@ -89,6 +86,7 @@ func (i *inactives) getFaultiesWithout(pid *tss.PartyID) []*tss.PartyID {
 	if len(i.partyIDs) == 0 {
 		return i.partyIDs
 	}
+
 	faulties := make([]*tss.PartyID, 0, len(i.partyIDs)-1)
 	for _, p := range i.partyIDs {
 		if equalPartyIds(p, pid) {
@@ -192,29 +190,32 @@ func (t *Engine) ftTracker() {
 			return
 
 		case cmd := <-t.ftCommandChan:
-			f.executeCommand(t, cmd)
+			cmd.apply(t, f)
+			// f.executeCommand(t, cmd)
 		case <-f.sigAlerts.WaitOnTimer():
 			f.inspectAlertHeapsTop(t)
 		}
 	}
 }
 
-func (f *ftTracker) executeCommand(t *Engine, cmd ftCommand) {
-	switch c := cmd.(type) {
-	case *signCommand:
-		f.executeSignCommand(t, c)
-	case *deliveryCommand:
-		f.executeDeliveryCommand(t, c)
-	case *getInactiveGuardiansCommand:
-		f.executeGetIncativeGuardiansCommand(t, c)
-	case *parsedProblem:
-		f.executeParsedProblemCommand(t, c)
-	default:
-		t.logger.Error("received unknown command type", zap.Any("cmd", cmd))
-	}
-}
+// supporting the ftCmd interface
 
-func (cmd *parsedProblem) deteministicJitter() time.Duration {
+// func (f *ftTracker) apply(t *Engine, cmd ftCommand) {
+// 	switch c := cmd.(type) {
+// 	case *signCommand:
+// 		f.executeSignCommand(t, c)
+// 	case *deliveryCommand:
+// 		f.executeDeliveryCommand(t, c)
+// 	case *getInactiveGuardiansCommand:
+// 		f.executeGetIncativeGuardiansCommand(t, c)
+// 	case *parsedProblem:
+// 		f.executeParsedProblemCommand(t, c)
+// 	default:
+// 		t.logger.Error("received unknown command type", zap.Any("cmd", cmd))
+// 	}
+// }
+
+func (cmd *reportProblemCommand) deteministicJitter() time.Duration {
 	bts, err := cmd.serialize()
 	if err != nil {
 		return 0
@@ -225,7 +226,7 @@ func (cmd *parsedProblem) deteministicJitter() time.Duration {
 	return time.Duration(nanoJitter) % (maxDownTimeJitter) // granularity of 1 second.
 }
 
-func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
+func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
 	// at this point, we assume the parsedProblem's time is correct and the signature is valid.
 	t.logger.Info("received a problem message from another guardian", zap.Any("problem issuer", cmd.issuer))
 
@@ -268,7 +269,7 @@ func (f *ftTracker) executeParsedProblemCommand(t *Engine, cmd *parsedProblem) {
 	}()
 }
 
-func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInactiveGuardiansCommand) {
+func (cmd *getInactiveGuardiansCommand) apply(t *Engine, f *ftTracker) {
 	if cmd.reply == nil {
 		t.logger.Error("reply channel is nil")
 		return
@@ -303,7 +304,7 @@ func (f *ftTracker) executeGetIncativeGuardiansCommand(t *Engine, cmd *getInacti
 }
 
 // used to update the state of the signature, ensuring alerts can be ignored.
-func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
+func (cmd *signCommand) apply(t *Engine, f *ftTracker) {
 	tid := cmd.SigningInfo.TrackingID
 	if tid == nil {
 		t.logger.Error("signCommand: tracking id is nil")
@@ -345,7 +346,7 @@ func (f *ftTracker) executeSignCommand(t *Engine, cmd *signCommand) {
 	}
 }
 
-func (f *ftTracker) executeDeliveryCommand(t *Engine, cmd *deliveryCommand) {
+func (cmd *deliveryCommand) apply(t *Engine, f *ftTracker) {
 	wmsg := cmd.parsedMsg.WireMsg()
 	if wmsg == nil {
 		t.logger.Error("deliveryCommand: wire message is nil")
