@@ -753,7 +753,7 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("down server returns and signs with original committee", func(t *testing.T) {
+	t.Run("down server returns during overlap time and signs with original committee", func(t *testing.T) {
 		a := assert.New(t)
 		supctx := testutils.MakeSupervisorContext(context.Background())
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
@@ -942,7 +942,7 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("1 sig 2 omission faults one after the other", func(t *testing.T) {
+	t.Run("1 sig f omission faults one after the other", func(t *testing.T) {
 		t.Skip()
 	})
 
@@ -991,6 +991,57 @@ func TestFT(t *testing.T) {
 
 				engine.BeginAsyncThresholdSigningProtocol(dgst[:], vaa.ChainID(i))
 			}
+		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("context expired", "context expired")
+		}
+	})
+
+	t.Run("2 server delayed on one chain rejoin signing after their downtime ends", func(t *testing.T) {
+		a := assert.New(t)
+		supctx := testutils.MakeSupervisorContext(context.Background())
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
+
+		cID := vaa.ChainID(1)
+		tsk := party.SigningTask{
+			Digest:       party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9},
+			Faulties:     []*tss.PartyID{},
+			AuxilaryData: chainIDToBytes(cID),
+		}
+
+		engines := loadGuardians(a)
+		signers := getSigningGuardians(a, engines, tsk)
+
+		fmt.Println("starting engines.")
+		for _, engine := range signers {
+			engine.GuardianStorage.Configurations.GuardianDownTime = synchronsingInterval
+			engine.GuardianStorage.MaxJitter = time.Microsecond
+			a.NoError(engine.Start(ctx))
+		}
+
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, 1)
+
+		fmt.Println("engines started, requesting sigs")
+
+		signers[0].reportProblem(cID)
+		signers[1].reportProblem(cID)
+
+		time.Sleep(synchronsingInterval / 2)
+
+		// Only engines from original comittee are allowed to sign.
+
+		// the signing guardian should use a committee with the other guardians (which we haven't started on purpose),
+		// since it received by now the problem message. (This is mainly to ensure: the guardian WILL allow signing this message)
+		signers[2].BeginAsyncThresholdSigningProtocol(tsk.Digest[:], cID)
+
+		time.Sleep(signers[0].GuardianDownTime + time.Second) // waiting for the downtime to end.
+
+		fmt.Println("###rejoining###")
+		for i := 0; i < 2; i++ { // letting them sign again.
+			signers[i].BeginAsyncThresholdSigningProtocol(tsk.Digest[:], cID)
 		}
 
 		if ctxExpiredFirst(ctx, dnchn) {

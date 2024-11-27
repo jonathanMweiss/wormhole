@@ -24,9 +24,9 @@ import (
 // and then stop signing temporarily.
 //
 // The logic behind this assumption is as follows:
-// Since I observed that f+1 joined the protocol to sign, I must have at least one honest server
-// who has seen the block and the signature, but I haven’t (after x seconds).
-// This implies that I am delayed, and I should temporarily remove myself from the committees for some time.
+// Since this party/node observed that f+1 joined the protocol to sign, at least one honest server
+// has seen the block and the signature, which this party/node haven’t (after x seconds).
+// This implies that this party/node is suffering from delay, and it should temporarily remove itself from the committees for some time.
 //
 //
 // ft Process: each guardian keeps track of the digest, signatures and trackingIDs it saw using the
