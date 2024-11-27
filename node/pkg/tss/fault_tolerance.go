@@ -120,6 +120,7 @@ type tackingIDContext struct {
 type signatureState struct {
 	chain vaa.ChainID // blockchain the message relates to (e.g. Ethereum, Solana, etc).
 
+	digest party.Digest
 	// States whether the guardian saw the digest and forwarded it to the engine to be signed by TSS.
 	approvedToSign bool
 
@@ -181,6 +182,11 @@ func (t *Engine) ftTracker() {
 		}
 	}
 
+	maxttl := t.GuardianStorage.maxSignerTTL()
+
+	ticker := time.NewTicker(maxttl)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-t.ctx.Done():
@@ -191,8 +197,30 @@ func (t *Engine) ftTracker() {
 			// f.executeCommand(t, cmd)
 		case <-f.sigAlerts.WaitOnTimer():
 			f.inspectAlertHeapsTop(t)
+		case <-ticker.C:
+			f.cleanup(maxttl)
 		}
 	}
+}
+
+func (f *ftTracker) cleanup(maxttl time.Duration) {
+	now := time.Now()
+
+	for _, sigState := range f.sigsState {
+		if now.Sub(sigState.beginTime) < maxttl {
+			continue
+		}
+
+		f.remove(sigState)
+	}
+}
+
+func (f *ftTracker) remove(sigState *signatureState) {
+	for _, m := range f.membersData {
+		delete(m.ftChainContext[sigState.chain].liveSigsWaitingForThisParty, sigState.digest)
+	}
+
+	delete(f.sigsState, sigState.digest)
 }
 
 // supporting the ftCmd interface
@@ -321,7 +349,8 @@ func (cmd *signCommand) apply(t *Engine, f *ftTracker) {
 	state, ok := f.sigsState[dgst]
 	if !ok {
 		state = &signatureState{
-			chain: extractChainIDFromTrackingID(tid),
+			chain:  extractChainIDFromTrackingID(tid),
+			digest: dgst,
 
 			trackidContext: map[trackidStr]*tackingIDContext{},
 			alertTime:      time.Now(),
@@ -370,6 +399,7 @@ func (cmd *deliveryCommand) apply(t *Engine, f *ftTracker) {
 		// create a sig state.
 		state = &signatureState{
 			chain:          extractChainIDFromTrackingID(tid),
+			digest:         dgst,
 			approvedToSign: false,
 			trackidContext: map[trackidStr]*tackingIDContext{},
 			alertTime:      time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime),
@@ -397,6 +427,11 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 	sigState := f.sigAlerts.Dequeue()
 
 	if sigState.approvedToSign {
+		return
+	}
+
+	if _, exists := f.sigsState[sigState.digest]; !exists {
+		// sig is removed (either old, or finished signing), and we don't need to do anything.
 		return
 	}
 

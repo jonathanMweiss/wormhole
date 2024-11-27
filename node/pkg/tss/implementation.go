@@ -512,14 +512,13 @@ func (t *Engine) handleFpOutput(m tss.Message) {
 }
 
 func (t *Engine) cleanup(maxTTL time.Duration) {
+	now := time.Now()
 
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
 	for k, v := range t.received {
-		if time.Since(v.timeReceived) > maxTTL {
-			// althoug delete doesn't reduce the size of the underlying map
-			// it is good enough since this map contains many entries, and it'll be wastefull to let a new map grow again.
+		if now.Sub(v.timeReceived) > maxTTL {
 			delete(t.received, k)
 
 			// since the fullParty deleted its state, we can remove the sigCounter entry.
