@@ -57,7 +57,6 @@ type signCommand struct {
 	SigningInfo *party.SigningInfo
 }
 
-// supporting the ftCmd interface
 type deliveryCommand struct {
 	parsedMsg tss.Message
 	from      *tss.PartyID
@@ -115,8 +114,6 @@ type getInactiveGuardiansCommand struct {
 	reply   chan inactives
 }
 
-func (g *getInactiveGuardiansCommand) ftCmd() {}
-
 type tackingIDContext struct {
 	sawProtocolMessagesFrom map[strPartyId]bool
 }
@@ -125,8 +122,9 @@ type tackingIDContext struct {
 // the same struct is held by two different data structures:
 //  1. a map so we can access and update the sigState easily.
 //  2. a timedHeap that orders the signatures by the time they should be checked.
-//     once the timedHeap timer expires we inspect the top (sigState) and decide whether we should report
-//     a problem to the other guardians, or we should increase the timeout for this signature.
+//     once the timedHeap timer expires we inspect the top (*sigState) and decide whether we should report
+//     a problem to the other guardians, increase the timeout for this signature and check again later, or
+//     drop the timer since we've seen the message.
 type signatureState struct {
 	chain vaa.ChainID // blockchain the message relates to (e.g. Ethereum, Solana, etc).
 
