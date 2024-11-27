@@ -149,7 +149,9 @@ func (e *endDownTimeAlert) GetEndTime() time.Time {
 	return e.alertTime
 }
 
-type sigStateKey party.Digest
+// sigStateKey contains two main parts of common.TrackID: the digest and the chainID.
+// it doesan't contain the faulty bitmap since we want to point to the same signature even if the faulty bitmap changes.
+type sigStateKey [party.DigestSize + auxiliaryDataSize]byte
 
 type ftChainContext struct {
 	timeToRevive                time.Time                       // the time this party is expected to come back and be part of the protocol again.
@@ -237,10 +239,18 @@ func (f *ftTracker) cleanup(maxttl time.Duration) {
 
 func (f *ftTracker) remove(sigState *signatureState) {
 	for _, m := range f.membersData {
-		delete(m.ftChainContext[sigState.chain].liveSigsWaitingForThisParty, sigStateKey(sigState.digest))
+		delete(m.ftChainContext[sigState.chain].liveSigsWaitingForThisParty, intoSigStateKey(sigState.digest, sigState.chain))
 	}
 
-	delete(f.sigsState, sigStateKey(sigState.digest))
+	delete(f.sigsState, intoSigStateKey(sigState.digest, sigState.chain))
+}
+
+func intoSigStateKey(dgst party.Digest, chain vaa.ChainID) sigStateKey {
+	var key sigStateKey
+	copy(key[:party.DigestSize], dgst[:])
+	copy(key[party.DigestSize:], chainIDToBytes(chain))
+
+	return key
 }
 
 func (cmd *reportProblemCommand) deteministicJitter(maxjitter time.Duration) time.Duration {
@@ -298,9 +308,11 @@ func (cmd *reportProblemCommand) apply(t *Engine, f *ftTracker) {
 	chainData.liveSigsWaitingForThisParty = map[sigStateKey]*signatureState{} // clear the live sigs.
 
 	go func() {
-		for dgst := range retryNow {
+		for _, sig := range retryNow {
 			// TODO: maybe find something smarter to do here.
-			t.BeginAsyncThresholdSigningProtocol(dgst[:], chainID)
+			if err := t.BeginAsyncThresholdSigningProtocol(sig.digest[:], chainID); err != nil {
+				t.logger.Error("failed to retry a signature", zap.Error(err))
+			}
 		}
 	}()
 }
@@ -353,10 +365,11 @@ func (cmd *signCommand) apply(t *Engine, f *ftTracker) {
 	dgst := party.Digest{}
 	copy(dgst[:], tid.Digest[:])
 
+	chain := extractChainIDFromTrackingID(tid)
 	// TODO: Ensure the digest contains the auxilaryData. otherwise, there can be two signatures witth the same digest? I doubt it.
-	state, ok := f.sigsState[sigStateKey(dgst)]
+	state, ok := f.sigsState[intoSigStateKey(dgst, chain)]
 	if !ok {
-		state = f.setNewSigState(tid, time.Now())
+		state = f.setNewSigState(dgst, chain, time.Now())
 	}
 
 	state.approvedToSign = true
@@ -374,7 +387,7 @@ func (cmd *signCommand) apply(t *Engine, f *ftTracker) {
 			m.ftChainContext[state.chain] = chainData
 		}
 
-		chainData.liveSigsWaitingForThisParty[sigStateKey(dgst)] = state
+		chainData.liveSigsWaitingForThisParty[intoSigStateKey(dgst, state.chain)] = state
 	}
 }
 
@@ -394,10 +407,12 @@ func (cmd *deliveryCommand) apply(t *Engine, f *ftTracker) {
 	dgst := party.Digest{}
 	copy(dgst[:], tid.GetDigest())
 
-	state, ok := f.sigsState[sigStateKey(dgst)]
+	chain := extractChainIDFromTrackingID(tid)
+
+	state, ok := f.sigsState[intoSigStateKey(dgst, chain)]
 	if !ok {
 		alertTime := time.Now().Add(t.GuardianStorage.MaxSigStartWaitTime)
-		state = f.setNewSigState(tid, alertTime)
+		state = f.setNewSigState(dgst, chain, alertTime)
 
 		// Since this is a delivery and not a sign command, we add this to the alert heap.
 		f.sigAlerts.Enqueue(state)
@@ -415,20 +430,18 @@ func (cmd *deliveryCommand) apply(t *Engine, f *ftTracker) {
 	tidData.sawProtocolMessagesFrom[strPartyId(partyIdToString(cmd.from))] = true
 }
 
-func (f *ftTracker) setNewSigState(tid *common.TrackingID, alertTime time.Time) *signatureState {
-	dgst := party.Digest{}
-	copy(dgst[:], tid.Digest)
+func (f *ftTracker) setNewSigState(digest party.Digest, chain vaa.ChainID, alertTime time.Time) *signatureState {
 
 	state := &signatureState{
-		chain:          extractChainIDFromTrackingID(tid),
-		digest:         dgst,
+		chain:          chain,
+		digest:         digest,
 		approvedToSign: false,
 		trackidContext: map[trackidStr]*tackingIDContext{},
 		alertTime:      alertTime,
 		beginTime:      time.Now(),
 	}
 
-	f.sigsState[sigStateKey(dgst)] = state
+	f.sigsState[intoSigStateKey(digest, chain)] = state
 
 	return state
 }
@@ -439,7 +452,7 @@ func (f *ftTracker) inspectAlertHeapsTop(t *Engine) {
 		return
 	}
 
-	if _, exists := f.sigsState[sigStateKey(sigState.digest)]; !exists {
+	if _, exists := f.sigsState[intoSigStateKey(sigState.digest, sigState.chain)]; !exists {
 		// sig is removed (either old, or finished signing), and we don't need to do anything.
 		return
 	}
