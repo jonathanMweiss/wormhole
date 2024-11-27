@@ -64,8 +64,7 @@ type deliveryCommand struct {
 }
 
 type SigEndCommand struct {
-	// TODO: don't forget to remove and release resources, and free memory from the chainData of a sig.
-	*common.TrackingID
+	*common.TrackingID // either from error, or from success.
 }
 
 type reportProblemCommand struct {
@@ -76,6 +75,17 @@ type inactives struct {
 	partyIDs []*tss.PartyID
 
 	downtimeEnding []*tss.PartyID
+}
+
+// getFaultiesLists returns a list of all relevant faulties lists.
+// will drop from faulties each guardian that is in the downtimeEnding list.
+// that is, generates a list of size (n choose n-1) + 1.
+func (i *inactives) getFaultiesLists() [][]*tss.PartyID {
+	listOfAllFaultiesLists := make([][]*tss.PartyID, 0, len(i.downtimeEnding)+1)
+	for _, v := range append([]*tss.PartyID{nil}, i.downtimeEnding...) {
+		listOfAllFaultiesLists = append(listOfAllFaultiesLists, i.getFaultiesWithout(v))
+	}
+	return listOfAllFaultiesLists
 }
 
 func (i *inactives) getFaultiesWithout(pid *tss.PartyID) []*tss.PartyID {
@@ -190,6 +200,7 @@ func (t *Engine) ftTracker() {
 		sigsState:      make(map[sigStateKey]*signatureState),
 		membersData:    make(map[strPartyId]*ftParty),
 		downtimeAlerts: internal.NewTtlHeap[*endDownTimeAlert](),
+		chainIdsToSigs: map[vaa.ChainID]map[sigStateKey]*signatureState{},
 	}
 
 	for _, pid := range t.GuardianStorage.Guardians {
@@ -238,11 +249,21 @@ func (f *ftTracker) cleanup(maxttl time.Duration) {
 }
 
 func (f *ftTracker) remove(sigState *signatureState) {
-	for _, m := range f.membersData {
-		delete(m.ftChainContext[sigState.chain].liveSigsWaitingForThisParty, intoSigStateKey(sigState.digest, sigState.chain))
+	if sigState == nil {
+		return
 	}
 
-	delete(f.sigsState, intoSigStateKey(sigState.digest, sigState.chain))
+	key := intoSigStateKey(sigState.digest, sigState.chain)
+	for _, m := range f.membersData {
+		delete(m.ftChainContext[sigState.chain].liveSigsWaitingForThisParty, key)
+	}
+
+	chn, ok := f.chainIdsToSigs[sigState.chain]
+	if ok {
+		delete(chn, key)
+	}
+
+	delete(f.sigsState, key)
 }
 
 func intoSigStateKey(dgst party.Digest, chain vaa.ChainID) sigStateKey {
@@ -323,35 +344,40 @@ func (cmd *getInactiveGuardiansCommand) apply(t *Engine, f *ftTracker) {
 		return
 	}
 
-	reply := inactives{}
-
-	for _, m := range f.membersData {
-		chainData, ok := m.ftChainContext[cmd.ChainID]
-		if !ok {
-			chainData = newChainContext()
-			m.ftChainContext[cmd.ChainID] = chainData
-
-			continue // never seen before, so it's active.
-		}
-
-		diff := time.Until(chainData.timeToRevive)
-
-		//  |revive_time - now| < synchronsingInterval, then its time to revive comes soon.
-		if diff.Abs() < synchronsingInterval {
-			reply.downtimeEnding = append(reply.downtimeEnding, m.partyID)
-		}
-
-		// if revive time is in the future, then the guardian is inactive.
-		if diff > 0 {
-			reply.partyIDs = append(reply.partyIDs, m.partyID)
-		}
-	}
+	reply := f.getIncatives(cmd.ChainID)
 
 	if err := intoChannelOrDone(t.ctx, cmd.reply, reply); err != nil {
 		t.logger.Error("error on telling on inactive guardians on specific chain", zap.Error(err))
 	}
 
 	close(cmd.reply)
+}
+
+func (f *ftTracker) getIncatives(chainID vaa.ChainID) inactives {
+	reply := inactives{}
+
+	for _, m := range f.membersData {
+		chainData, ok := m.ftChainContext[chainID]
+		if !ok {
+			chainData = newChainContext()
+			m.ftChainContext[chainID] = chainData
+
+			continue // never seen before, so it's active.
+		}
+
+		diff := time.Until(chainData.timeToRevive)
+		//  |revive_time - now| < synchronsingInterval, then its time to revive comes soon.
+		if diff.Abs() < synchronsingInterval {
+			reply.downtimeEnding = append(reply.downtimeEnding, m.partyID)
+		}
+
+		//there is time to wait until the guardian is back, so it's inactive.
+		if diff > 0 {
+			reply.partyIDs = append(reply.partyIDs, m.partyID)
+		}
+	}
+
+	return reply
 }
 
 // used to update the state of the signature, ensuring alerts can be ignored.
@@ -389,6 +415,16 @@ func (cmd *signCommand) apply(t *Engine, f *ftTracker) {
 
 		chainData.liveSigsWaitingForThisParty[intoSigStateKey(dgst, state.chain)] = state
 	}
+}
+
+func (cmd *SigEndCommand) apply(t *Engine, f *ftTracker) {
+	dgst := party.Digest{}
+	copy(dgst[:], cmd.Digest[:])
+
+	chain := extractChainIDFromTrackingID(cmd.TrackingID)
+	key := intoSigStateKey(dgst, chain)
+
+	f.remove(f.sigsState[key])
 }
 
 func (cmd *deliveryCommand) apply(t *Engine, f *ftTracker) {
@@ -441,7 +477,15 @@ func (f *ftTracker) setNewSigState(digest party.Digest, chain vaa.ChainID, alert
 		beginTime:      time.Now(),
 	}
 
-	f.sigsState[intoSigStateKey(digest, chain)] = state
+	sigkey := intoSigStateKey(digest, chain)
+	f.sigsState[sigkey] = state
+
+	chn, ok := f.chainIdsToSigs[chain]
+	if !ok {
+		chn = map[sigStateKey]*signatureState{}
+		f.chainIdsToSigs[chain] = chn
+	}
+	chn[sigkey] = state
 
 	return state
 }
@@ -510,9 +554,52 @@ func (s *signatureState) maxGuardianVotes() int {
 }
 
 func (f *ftTracker) inspectDowntimeAlertHeapsTop(t *Engine) {
-	// TODO: implement this.
-	// downtimeEndAlert := f.downtimeAlerts.Dequeue()
-	// need to go for each signature, and check
+	alert := f.downtimeAlerts.Dequeue()
+	if alert == nil {
+		return
+	}
 
-	panic("not implemented")
+	liveSigsInChain, ok := f.chainIdsToSigs[alert.chain]
+	if !ok {
+		return
+	}
+
+	// we don't have to change the revival time for this party, since it should be the same as the alert.
+	// instead we start collecting the signatures that should be retried.
+
+	inactives := f.getIncatives(alert.chain)
+
+	allReleveantFaulties := inactives.getFaultiesLists()
+
+	var toSign []*signatureState
+
+	for _, sigState := range liveSigsInChain {
+		if !sigState.approvedToSign {
+			continue // no need to retry this signature.
+		}
+
+		for _, faulties := range allReleveantFaulties {
+			// create signingTask and ask: am i one of the signers?
+			info, err := t.fp.GetSigningInfo(makeSigningRequest(sigState.digest, faulties, sigState.chain))
+			if err != nil {
+				t.logger.Error("while inspecting downtime alert, failed to gain sig info", zap.Error(err))
+				// TODO: not sure what to do or check here yet.
+				continue
+			}
+
+			// this guardian is a signer once this server revives? if it is: retry the signature.
+			if info.IsSigner {
+				toSign = append(toSign, sigState)
+			}
+		}
+	}
+
+	// retry signatures...
+	go func() {
+		for _, sig := range toSign {
+			if err := t.BeginAsyncThresholdSigningProtocol(sig.digest[:], sig.chain); err != nil {
+				t.logger.Error("failed to retry a signature", zap.Error(err))
+			}
+		}
+	}()
 }

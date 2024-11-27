@@ -241,25 +241,14 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 		return fmt.Errorf("failed to get inactive guardians: %w", err)
 	}
 
-	// adding nil to the list of downtimeEnding to ensure we run once without changing
-	// the list of failing guardians. that is, we run the protocol once without using
-	// any guardian that might revive soon.
-	// if there are no faulty guardians to revive, this ensure we run the protocol with faulties==nil.
-	for _, reviving := range append([]*tss.PartyID{nil}, inactiveParties.downtimeEnding...) {
-		faulties := inactiveParties.getFaultiesWithout(reviving)
-
+	for _, faulties := range inactiveParties.getFaultiesLists() {
 		if len(faulties) > t.getMaxExpectedFaults() {
 			t.logger.Error("too many faulty guardians to start the signing protocol")
 
 			continue // not a failure of the method, so it should continue, instead of returning an error.
 		}
 
-		info, err := t.fp.AsyncRequestNewSignature(party.SigningTask{
-			Digest: d,
-			// indicating the reviving guardian will be given a chance to join the protocol.
-			Faulties:     faulties,
-			AuxilaryData: chainIDToBytes(chainID),
-		})
+		info, err := t.fp.AsyncRequestNewSignature(makeSigningRequest(d, faulties, chainID))
 
 		if err != nil {
 			// note, we don't inform the fault-tolerance tracker of the error, so it can put this guardian in timeoout.
@@ -287,6 +276,15 @@ func (t *Engine) BeginAsyncThresholdSigningProtocol(vaaDigest []byte, chainID va
 	}
 
 	return nil
+}
+
+func makeSigningRequest(d party.Digest, faulties []*tss.PartyID, chainID vaa.ChainID) party.SigningTask {
+	return party.SigningTask{
+		Digest: d,
+		// indicating the reviving guardian will be given a chance to join the protocol.
+		Faulties:     faulties,
+		AuxilaryData: chainIDToBytes(chainID),
+	}
 }
 
 func NewReliableTSS(storage *GuardianStorage) (ReliableTSS, error) {
@@ -453,6 +451,9 @@ func (t *Engine) handleFpSignature(sig *common.SignatureData) {
 	inProgressSigs.Dec()
 
 	t.sigCounter.remove(sig.TrackingId)
+	if err := intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &SigEndCommand{sig.TrackingId}); err != nil {
+		t.logger.Error("couldn't inform the fault-tolerance tracker of the signature end", zap.Error(err), zap.String("trackingId", sig.TrackingId.ToString()))
+	}
 
 	if err := intoChannelOrDone(t.ctx, t.sigOutChan, sig); err != nil {
 		t.logger.Error("couldn't deliver outside of engine the signature", zap.Error(err), zap.String("trackingId", sig.TrackingId.ToString()))
@@ -465,6 +466,17 @@ func (t *Engine) handleFpError(err *tss.Error) {
 	}
 
 	trackid := err.TrackingId()
+	if trackid == nil {
+		t.logger.Error("error (without trackingID) in signing protocol ", zap.Error(err.Cause()))
+		return
+	}
+
+	if err := intoChannelOrDone[ftCommand](t.ctx, t.ftCommandChan, &SigEndCommand{trackid}); err != nil {
+		t.logger.Error("couldn't inform the fault-tolerance tracker of signature end due to error",
+			zap.Error(err),
+			zap.String("trackingId", trackid.ToString()),
+		)
+	}
 
 	// if someone sent a message that caused an error -> we don't
 	// accept an override to that message, therefore, we can remove it, since it won't change.
