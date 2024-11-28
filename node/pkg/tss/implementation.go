@@ -447,6 +447,8 @@ func (t *Engine) handleFpSignature(sig *common.SignatureData) {
 		return
 	}
 
+	t.logger.Debug("signature complete. updating inner state and forwarding it", zap.String("trackingId", sig.TrackingId.ToString()))
+
 	sigProducedCntr.Inc()
 	inProgressSigs.Dec()
 

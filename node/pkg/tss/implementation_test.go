@@ -855,13 +855,18 @@ func TestFT(t *testing.T) {
 		a := assert.New(t)
 		engines := loadGuardians(a)
 		n := 3
-		digests := make([]party.Digest, n)
+		chainId := vaa.ChainID(1)
+		digests := make([]party.SigningTask, n)
 		for i := 0; i < n; i++ {
-			digests[i] = party.Digest{byte(i)}
+			digests[i] = party.SigningTask{
+				Digest:       [32]byte{byte(i)},
+				Faulties:     nil,
+				AuxilaryData: chainIDToBytes(chainId),
+			}
 		}
 
 		supctx := testutils.MakeSupervisorContext(context.Background())
-		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		ctx, cancel := context.WithTimeout(supctx, time.Minute/4)
 		defer cancel()
 
 		fmt.Println("starting engines.")
@@ -869,27 +874,25 @@ func TestFT(t *testing.T) {
 			a.NoError(engine.Start(ctx))
 		}
 
+		e := getSigningGuardian(a, engines, digests...)
+		a.NotNil(e)
+
 		fmt.Println("msgHandler settup:")
 		dnchn := msgHandler(ctx, engines, len(digests))
 
 		fmt.Println("engines started, requesting sigs")
 
 		go func() {
-			time.Sleep(time.Second / 2)          // plenty of time for the servers to start signing.
-			engines[0].started.Store(notStarted) // stopping a server from accepting incoming messages.
-			engines[0].reportProblem(0)          // telling the server to report to everyone it has an issue.
-
-			fmt.Println("========\nIssued problem now!\n========")
+			time.Sleep(time.Second / 4) // enough time for the engines to start the signing protocol.
+			e.reportProblem(chainId)    // telling the server to report to everyone it has an issue.
+			fmt.Printf("========\n %v Issued problem now!\n=======\n=", e.Self.Id)
 		}()
 
 		for _, d := range digests {
 			d := d
 
 			for _, engine := range engines {
-				tmp := make([]byte, 32)
-				copy(tmp, d[:])
-
-				engine.BeginAsyncThresholdSigningProtocol(tmp, 0)
+				engine.BeginAsyncThresholdSigningProtocol(d.Digest[:], chainId)
 			}
 		}
 
@@ -1291,7 +1294,7 @@ func msgHandler(ctx context.Context, engines []*Engine, numDiffSigsExpected int)
 							continue
 						}
 
-						fmt.Println("/////////\nreceived all signatures\n/////////")
+						fmt.Printf("/////////\nreceived all signatures (%v)\n/////////\n", numDiffSigsExpected)
 						once.Do(func() {
 							close(signalSuccess)
 						})
