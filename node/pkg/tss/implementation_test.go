@@ -921,7 +921,7 @@ func TestFT(t *testing.T) {
 		cid := vaa.ChainID(0)
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
-		engines, err := loadGuardians(5, "tss5")
+		engines, err := loadGuardians(7, "tss7")
 		a.NoError(err)
 
 		fmt.Println("starting engines.")
@@ -957,8 +957,63 @@ func TestFT(t *testing.T) {
 		}
 	})
 
-	t.Run("1 sig f omission faults one after the other", func(t *testing.T) {
-		t.Skip()
+	t.Run("3 sig f faults", func(t *testing.T) {
+		a := assert.New(t)
+
+		supctx := testutils.MakeSupervisorContext(context.Background())
+		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
+		defer cancel()
+
+		engines, err := loadGuardians(7, "tss7")
+		a.NoError(err)
+
+		a.Len(engines, 7)
+
+		fmt.Println("starting engines.")
+		for _, engine := range engines {
+			a.NoError(engine.Start(ctx))
+		}
+
+		fmt.Println("msgHandler settup:")
+		dnchn := msgHandler(ctx, engines, 1)
+
+		fmt.Println("engines started, requesting sigs")
+
+		cID := vaa.ChainID(1)
+		tsks := make([]party.SigningTask, 3)
+		for i := range tsks {
+			tsks[i] = party.SigningTask{
+				Digest:       party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9},
+				Faulties:     []*tss.PartyID{},
+				AuxilaryData: chainIDToBytes(cID),
+			}
+		}
+		signers := getSigningGuardians(a, engines, tsks...)
+		a.GreaterOrEqual(len(signers), 3)
+
+		removed := signers[:engines[0].getMaxExpectedFaults()]
+		for _, r := range removed {
+			r.MaxSigStartWaitTime /= 2 // reducing test time.
+		}
+
+		for _, engine := range engines {
+
+			// skipping the engines that are removed.
+			if contains(removed, engine) {
+				continue
+			}
+
+			for _, tsk := range tsks {
+				tmp := make([]byte, len(tsk.Digest))
+				copy(tmp, tsk.Digest[:])
+
+				engine.BeginAsyncThresholdSigningProtocol(tmp, cID)
+			}
+		}
+
+		if ctxExpiredFirst(ctx, dnchn) {
+			a.FailNowf("context expired", "context expired")
+		}
 	})
 
 	t.Run("recover given a missing heartbeat", func(t *testing.T) {
@@ -1535,4 +1590,14 @@ func round1NumberOfMessages(e1 *Engine) int {
 	// although threshold is non-inclusive, we only send e1.Threshold since one doesn't includes itself in the unicasts.
 	// the +1 is for the additional broadcast message.
 	return e1.Threshold + 1
+}
+
+func contains(lst []*Engine, e *Engine) bool {
+	for _, l := range lst {
+		if l.Self.Id == e.Self.Id {
+			return true
+		}
+	}
+
+	return false
 }
