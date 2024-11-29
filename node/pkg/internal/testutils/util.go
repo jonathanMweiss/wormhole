@@ -22,13 +22,17 @@ func MustGetMockGuardianTssStorage() string {
 	return str
 }
 
-func GetMockGuardianTssStorage(guardianIndex int) (string, error) {
+func GetMockGuardianTssStorage(guardianIndex int, guardianTssStorageSet ...string) (string, error) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		return "", errors.New("could not get runtime.Caller(0)")
 	}
 
-	guardianStorageFname := path.Join(path.Dir(file), "testdata", fmt.Sprintf("guardian%d.json", guardianIndex))
+	setFolder := "tss5"
+	if len(guardianTssStorageSet) > 0 {
+		setFolder = guardianTssStorageSet[0]
+	}
+	guardianStorageFname := path.Join(path.Dir(file), "testdata", setFolder, fmt.Sprintf("guardian%d.json", guardianIndex))
 	return guardianStorageFname, nil
 }
 
