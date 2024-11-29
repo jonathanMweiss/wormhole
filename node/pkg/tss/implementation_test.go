@@ -120,7 +120,7 @@ func TestBroadcast(t *testing.T) {
 }
 
 func load5GuardiansSetupForBroadcastChecks(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(5) // f=1, n=5.
+	engines, err := loadGuardians(5, "tss5") // f=1, n=5.
 	a.NoError(err)
 
 	for _, v := range engines {
@@ -587,7 +587,8 @@ func TestE2E(t *testing.T) {
 		inProgressSigs.Set(0) // reseting the gauge.
 
 		a := assert.New(t)
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
 
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
@@ -648,7 +649,8 @@ func TestE2E(t *testing.T) {
 
 	t.Run("with 5 sigs", func(t *testing.T) {
 		a := assert.New(t)
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
 
 		digests := make([]party.Digest, 5)
 		for i := 0; i < 5; i++ {
@@ -711,7 +713,9 @@ func TestFT(t *testing.T) {
 		ctx, cancel := context.WithTimeout(supctx, time.Minute*1)
 		defer cancel()
 
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
+
 		fmt.Println("starting engines.")
 		for _, engine := range engines {
 			a.NoError(engine.Start(ctx))
@@ -766,7 +770,9 @@ func TestFT(t *testing.T) {
 			AuxilaryData: chainIDToBytes(cID),
 		}
 
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
+
 		signers := getSigningGuardians(a, engines, tsk)
 
 		fmt.Println("starting engines.")
@@ -816,7 +822,9 @@ func TestFT(t *testing.T) {
 			AuxilaryData: chainIDToBytes(cID),
 		}
 
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
+
 		signers := getSigningGuardians(a, engines, signingTask)
 		a.Len(signers, 3)
 
@@ -853,7 +861,9 @@ func TestFT(t *testing.T) {
 
 	t.Run("server crashes during signing multiple digests", func(t *testing.T) {
 		a := assert.New(t)
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
+
 		n := 3
 		chainId := vaa.ChainID(1)
 		digests := make([]party.SigningTask, n)
@@ -911,7 +921,9 @@ func TestFT(t *testing.T) {
 		cid := vaa.ChainID(0)
 		dgst := party.Digest{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
+
 		fmt.Println("starting engines.")
 		for _, engine := range engines {
 			a.NoError(engine.Start(ctx))
@@ -961,7 +973,9 @@ func TestFT(t *testing.T) {
 
 		ctx = testutils.MakeSupervisorContext(ctx)
 
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
+
 		fmt.Println("starting engines.")
 		for _, engine := range engines {
 			a.NoError(engine.Start(ctx))
@@ -1014,7 +1028,9 @@ func TestFT(t *testing.T) {
 			AuxilaryData: chainIDToBytes(cID),
 		}
 
-		engines := loadGuardians(a)
+		engines, err := loadGuardians(5, "tss5")
+		a.NoError(err)
+
 		signers := getSigningGuardians(a, engines, tsk)
 
 		fmt.Println("starting engines.")
@@ -1174,8 +1190,8 @@ func generateFakeMessageWithRandomContent(from, to *tss.PartyID, rnd signingRoun
 	return tss.NewMessage(meta, content, tss.NewMessageWrapper(meta, content, trackingId))
 }
 
-func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
-	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex)
+func loadMockGuardianStorage(gstorageIndex int, from string) *GuardianStorage {
+	path, err := testutils.GetMockGuardianTssStorage(gstorageIndex, from)
 	if err != nil {
 		panic(err)
 	}
@@ -1187,11 +1203,11 @@ func loadMockGuardianStorage(gstorageIndex int) *GuardianStorage {
 	return st
 }
 
-func _loadGuardians(numParticipants int) ([]*Engine, error) {
+func loadGuardians(numParticipants int, from string) ([]*Engine, error) {
 	engines := make([]*Engine, numParticipants)
 
 	for i := 0; i < numParticipants; i++ {
-		e, err := NewReliableTSS(loadMockGuardianStorage(i))
+		e, err := NewReliableTSS(loadMockGuardianStorage(i, from))
 		if err != nil {
 			return nil, err
 		}
@@ -1203,13 +1219,6 @@ func _loadGuardians(numParticipants int) ([]*Engine, error) {
 	}
 
 	return engines, nil
-}
-
-func loadGuardians(a *assert.Assertions) []*Engine {
-	engines, err := _loadGuardians(Participants)
-	a.NoError(err)
-
-	return engines
 }
 
 type msgg struct {
