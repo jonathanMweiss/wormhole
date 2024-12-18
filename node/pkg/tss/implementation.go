@@ -7,6 +7,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"os"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -447,6 +449,20 @@ func (t *Engine) fpListener() {
 
 	cleanUpTicker := time.NewTicker(maxTTL)
 
+	f, err := os.Create("/home/jonathan/cpu.prof")
+	if err != nil {
+		panic("couldn't set  cpu profiler: " + err.Error())
+	}
+
+	f.Chmod(0777)
+	defer f.Close()
+
+	if err := pprof.StartCPUProfile(f); err != nil {
+		t.logger.Error("couldn't start cpu profile", zap.Error(err))
+	}
+
+	defer pprof.StopCPUProfile()
+
 	for {
 		select {
 		case <-t.ctx.Done():
@@ -469,8 +485,41 @@ func (t *Engine) fpListener() {
 
 		case <-cleanUpTicker.C:
 			t.cleanup(maxTTL)
+			t.runProfilers()
 		}
 	}
+}
+
+func (t *Engine) runProfilers() {
+	if t == nil {
+		return
+	}
+
+	if t.started.Load() != started {
+		return
+	}
+
+	// create new file, if it exists overwrite it.
+	f, err := os.Create("/home/jonathan/heap.prof")
+	if err != nil {
+		t.logger.Error("couldn't create file for tss heap profile", zap.Error(err))
+		return
+	}
+	defer f.Close()
+
+	f.Chmod(0777)
+	pprof.Lookup("heap").WriteTo(f, 0)
+
+	fmem, err := os.Create("/home/jonathan/allocs.prof")
+	if err != nil {
+		t.logger.Error("couldn't create file for tss mem profile", zap.Error(err))
+		return
+	}
+	defer fmem.Close()
+
+	fmem.Chmod(0777)
+
+	pprof.Lookup("allocs").WriteTo(fmem, 0)
 }
 
 func (t *Engine) handleFpSignature(sig *common.SignatureData) {
